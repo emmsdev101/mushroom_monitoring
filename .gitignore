@@ -1,0 +1,37 @@
+# Arduino/ESP32
+*.bin
+*.elf
+*.map
+arduino/MushroomNursery/config.h
+
+# Firebase
+firebase/.runtimeconfig.json
+firebase/.firebaserc
+firebase/firebase-debug.log
+firebase/.firebase/
+firebase/functions/node_modules/
+
+# Expo / React Native
+mobile-app/node_modules/
+mobile-app/.expo/
+mobile-app/dist/
+mobile-app/*.apk
+mobile-app/*.aab
+mobile-app/*.keystore
+mobile-app/android/
+mobile-app/ios/
+
+# OS
+Thumbs.db
+Desktop.ini
+
+# Secrets
+.env
+**/*.local
+secrets.json
+serviceAccountKey.json
+
+# Node server
+server/node_modules/
+server/.env
+

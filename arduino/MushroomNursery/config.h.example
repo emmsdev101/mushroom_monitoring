@@ -1,0 +1,31 @@
+#pragma once
+
+#define WIFI_MANAGER_AP_NAME "MushroomNursery-Setup"
+#define WIFI_MANAGER_AP_PASSWORD ""
+#define WIFI_MANAGER_CONFIG_PORTAL_TIMEOUT_SEC 180
+
+/* First-time / factory default for server URL (WiFiManager portal + NVS also override). */
+#define SERVER_BASE_URL_DEFAULT "http://192.168.1.50:3000"
+#define SERVER_API_KEY ""
+
+#define DEVICE_ID "nursery-01"
+
+#define DHT_PIN 4
+#define DHT_TYPE DHT22
+
+#define SCD41_I2C_SDA 21
+#define SCD41_I2C_SCL 22
+
+#define RELAY_PIN 23
+#define RELAY_ACTIVE_HIGH 1
+
+/* At boot: hold this pin to GND (jumper) for WIFI_RESET_HOLD_MS to erase saved Wi‑Fi and force WiFiManager setup. Set to -1 to disable. */
+#define WIFI_RESET_PIN 18
+#define WIFI_RESET_HOLD_MS 600
+
+#define DEFAULT_CO2_THRESHOLD_PPM 800
+
+/* Volvariella volvacea (straw / paddy mushroom): fruiting ~28-32 C, RH ~85-92%.
+   Fan ventilates when readings rise above these upper limits (stale air / excess heat / moisture). */
+#define DEFAULT_TEMP_FAN_ON_C 32.0f
+#define DEFAULT_HUM_FAN_ON_PCT 92.0f

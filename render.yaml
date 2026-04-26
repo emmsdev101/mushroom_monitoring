@@ -1,0 +1,17 @@
+# Render Blueprint: https://render.com/docs/blueprint-spec
+# After connecting this repo, use "Apply render.yaml" or create a Web Service with Root Directory = server.
+
+services:
+  - type: web
+    name: mushroom-nursery-server
+    runtime: node
+    region: oregon
+    plan: free
+    rootDir: server
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      # Set a secret in the Render Dashboard (ESP32 + app send header X-API-Key).
+      - key: API_KEY
+        sync: false

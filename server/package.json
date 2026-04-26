@@ -1,0 +1,19 @@
+{
+  "name": "mushroom-nursery-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Receives ESP32 telemetry and serves control settings for Mushroom Nursery",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "firebase": "^11.0.0"
+  }
+}

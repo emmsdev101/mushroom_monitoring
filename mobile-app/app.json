@@ -1,0 +1,23 @@
+{
+  "expo": {
+    "name": "Mushroom Nursery",
+    "slug": "mushroom-nursery",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "com.emman.mushroomnursery",
+      "versionCode": 1,
+      "edgeToEdgeEnabled": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "e2fd5c08-06a6-4a43-b1ab-00476198b0ee"
+      }
+    }
+  }
+}

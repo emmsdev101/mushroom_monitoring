@@ -15,7 +15,9 @@ import {
 import { devicePath, rtdbSet, useRtdbValue } from '../lib/rtdb';
 import { palette } from '../theme/palette';
 
-export default function SettingsScreen({ deviceIdState }) {
+import { changeLocalCreds, getLocalCreds } from '../lib/localAuth';
+
+export default function SettingsScreen({ deviceIdState, onSignOut }) {
   const scheme = useColorScheme();
   const isDark = scheme === 'dark';
   const bg = isDark ? palette.bgDark : palette.bgLight;
@@ -35,7 +37,18 @@ export default function SettingsScreen({ deviceIdState }) {
   const [manualFanOn, setManualFanOn] = useState(false);
   const [saving, setSaving] = useState(false);
 
+  const [adminUser, setAdminUser] = useState('');
+  const [currentPass, setCurrentPass] = useState('');
+  const [newPass, setNewPass] = useState('');
+  const [changingCreds, setChangingCreds] = useState(false);
+
   useEffect(() => setPendingDeviceId(deviceId), [deviceId]);
+
+  useEffect(() => {
+    getLocalCreds()
+      .then((c) => setAdminUser(c.username))
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     const v = control.value || {};
@@ -229,6 +242,89 @@ export default function SettingsScreen({ deviceIdState }) {
             ]}
           >
             {saving ? 'Saving…' : 'Save'}
+          </Text>
+        </View>
+
+        <Text style={[styles.section, { color: text, marginTop: 6 }]}>Admin account</Text>
+        <View style={[styles.card, { backgroundColor: surface, borderColor: border }]}>
+          <Text style={[styles.label, { color: sub }]}>Username</Text>
+          <TextInput
+            value={adminUser}
+            onChangeText={setAdminUser}
+            autoCapitalize="none"
+            autoCorrect={false}
+            placeholder="admin"
+            placeholderTextColor={isDark ? 'rgba(231,239,233,0.35)' : 'rgba(17,24,21,0.35)'}
+            style={[styles.input, { color: text, borderColor: border }]}
+          />
+
+          <Text style={[styles.label, { color: sub, marginTop: 10 }]}>Current password</Text>
+          <TextInput
+            value={currentPass}
+            onChangeText={setCurrentPass}
+            secureTextEntry
+            placeholder="admin"
+            placeholderTextColor={isDark ? 'rgba(231,239,233,0.35)' : 'rgba(17,24,21,0.35)'}
+            style={[styles.input, { color: text, borderColor: border }]}
+          />
+
+          <Text style={[styles.label, { color: sub, marginTop: 10 }]}>New password</Text>
+          <TextInput
+            value={newPass}
+            onChangeText={setNewPass}
+            secureTextEntry
+            placeholder="••••"
+            placeholderTextColor={isDark ? 'rgba(231,239,233,0.35)' : 'rgba(17,24,21,0.35)'}
+            style={[styles.input, { color: text, borderColor: border }]}
+          />
+
+          <Text
+            onPress={
+              changingCreds
+                ? undefined
+                : async () => {
+                    setChangingCreds(true);
+                    try {
+                      await changeLocalCreds({
+                        currentPassword: currentPass,
+                        nextUsername: adminUser,
+                        nextPassword: newPass || currentPass,
+                      });
+                      setCurrentPass('');
+                      setNewPass('');
+                      Alert.alert('Saved', 'Admin username/password updated on this phone.');
+                    } catch (e) {
+                      Alert.alert('Update failed', String(e?.message || e));
+                    } finally {
+                      setChangingCreds(false);
+                    }
+                  }
+            }
+            style={[
+              styles.saveBtn,
+              {
+                marginTop: 12,
+                alignSelf: 'flex-end',
+                backgroundColor: palette.forestGreen,
+                opacity: changingCreds ? 0.7 : 1,
+              },
+            ]}
+          >
+            {changingCreds ? 'Saving…' : 'Save credentials'}
+          </Text>
+
+          <Text
+            onPress={typeof onSignOut === 'function' ? onSignOut : undefined}
+            style={[
+              styles.saveBtn,
+              {
+                marginTop: 10,
+                alignSelf: 'flex-end',
+                backgroundColor: 'rgba(200, 70, 70, 0.85)',
+              },
+            ]}
+          >
+            Sign out
           </Text>
         </View>
       </ScrollView>

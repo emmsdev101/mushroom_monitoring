@@ -5,7 +5,7 @@
 #define WIFI_MANAGER_CONFIG_PORTAL_TIMEOUT_SEC 180
 
 /* First-time / factory default for server URL (WiFiManager portal + NVS also override). */
-#define SERVER_BASE_URL_DEFAULT "http://192.168.1.50:3000"
+#define SERVER_BASE_URL_DEFAULT "https://mushroom-nursery-server.onrender.com"
 #define SERVER_API_KEY ""
 
 #define DEVICE_ID "nursery-01"

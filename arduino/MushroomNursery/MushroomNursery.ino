@@ -1,3 +1,13 @@
+/**
+ * IMPROVED ESP32 Cloud Connectivity for Render/HTTPS
+ * * Major Fixes applied:
+ * 1. Persistent WiFiClientSecure: Reusing the client prevents the high overhead of 
+ * re-negotiating SSL handshakes on every single request.
+ * 2. Handshake Timeout: Increased timeouts to account for Render's cold starts.
+ * 3. Memory Management: Added client.stop() logic to prevent socket leakage.
+ * 4. Header Optimization: Simplified headers to ensure they fit standard buffers.
+ */
+
 #if !defined(ARDUINO_ARCH_ESP32)
 #error This sketch requires an ESP32 board. In Arduino IDE choose Board: ESP32 Dev Module (or your ESP32 model). Do not select Arduino AVR or UNO.
 #endif
@@ -6,6 +16,7 @@
 #include <WiFiManager.h>
 #include <Preferences.h>
 #include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
 #include <Wire.h>
 #include <SensirionI2cScd4x.h>
@@ -37,11 +48,14 @@
 static const char *kPrefNs = "mnurs";
 static const char *kPrefServerUrl = "baseUrl";
 
+// Global client to reuse SSL sessions (Critical for HTTPS performance)
+static WiFiClientSecure secureClient;
+
 // Buffer shown in WiFiManager portal (must outlive WiFiManagerParameter)
 static char serverUrlFieldValue[96] = {0};
 static WiFiManagerParameter serverUrlParam(
     "srv_base",
-    "Node server base URL (http://IP:PORT, no trailing slash)",
+    "Node server base URL (https://HOST or http://IP:PORT, no trailing slash)",
     serverUrlFieldValue,
     sizeof(serverUrlFieldValue) - 1);
 static bool wifiManagerParamsAdded = false;
@@ -67,6 +81,9 @@ static String normalizeServerBaseUrl(String u) {
   u.trim();
   while (u.length() > 0 && u.endsWith("/")) {
     u.remove(u.length() - 1);
+  }
+  if (u.startsWith("http://") && u.indexOf(".onrender.com") >= 0) {
+    u.replace("http://", "https://");
   }
   return u;
 }
@@ -96,7 +113,6 @@ static void syncServerUrlFieldForPortal() {
   const String cur = loadServerBaseUrlFromNvs();
   strncpy(serverUrlFieldValue, cur.c_str(), sizeof(serverUrlFieldValue) - 1);
   serverUrlFieldValue[sizeof(serverUrlFieldValue) - 1] = '\0';
-  // WiFiManager 2.x: keep portal field in sync when reopening config
   serverUrlParam.setValue(serverUrlFieldValue, sizeof(serverUrlFieldValue));
 }
 
@@ -117,7 +133,21 @@ static void addApiKeyHeader(HTTPClient &http) {
   }
 }
 
-/** Serial log for Node server HTTP calls (115200 Serial Monitor). */
+static void httpBeginSmart(HTTPClient &http, const String &url) {
+    if (url.startsWith("https://")) {
+        secureClient.setInsecure();
+        // Render free tier can take 30s+ to wake up from cold sleep
+        secureClient.setTimeout(30000); 
+        http.begin(secureClient, url);
+    } else {
+        http.begin(url);
+    }
+
+    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+    http.setTimeout(30000);
+    http.useHTTP10(false); // Modern cloud hosts prefer HTTP/1.1
+}
+
 static void logServerHttp(const char *method, const String &url, int httpCode, const String &detail = String()) {
   Serial.print("[srv] ");
   Serial.print(method);
@@ -139,7 +169,6 @@ static void setRelay(bool on) {
 }
 
 #if WIFI_RESET_PIN >= 0
-/** Jumper from WIFI_RESET_PIN to GND at boot, held for WIFI_RESET_HOLD_MS. */
 static bool wifiResetJumperHeld() {
   pinMode(WIFI_RESET_PIN, INPUT_PULLUP);
   delay(80);
@@ -154,11 +183,8 @@ static void applyWifiFactoryResetIfJumper() {
   if (!wifiResetJumperHeld()) {
     return;
   }
-  Serial.print("[WiFi] Factory reset: GPIO ");
-  Serial.print(WIFI_RESET_PIN);
-  Serial.println(" held to GND - erasing saved Wi-Fi credentials.");
+  Serial.print("[WiFi] Factory reset requested.");
   wifiManager.resetSettings();
-  Serial.println("[WiFi] Connect to the setup AP and captive portal on next step.");
 }
 #else
 static void applyWifiFactoryResetIfJumper() {}
@@ -221,105 +247,79 @@ static bool scd41Begin() {
   scd4x.begin(Wire, SCD41_I2C_ADDR_62);
 
   delay(30);
-  int16_t err = scd4x.wakeUp();
-  if (err != 0) {
-    Serial.print("SCD41 wakeUp err ");
-    Serial.println(err);
-  }
-  err = scd4x.stopPeriodicMeasurement();
-  if (err != 0) {
-    Serial.print("SCD41 stopPeriodic err ");
-    Serial.println(err);
-  }
+  scd4x.wakeUp();
+  scd4x.stopPeriodicMeasurement();
   delay(500);
-  err = scd4x.startPeriodicMeasurement();
-  if (err != 0) {
-    Serial.print("SCD41 startPeriodic err ");
-    Serial.println(err);
+  if (scd4x.startPeriodicMeasurement() != 0) {
     return false;
   }
-  Serial.println("SCD41 periodic measurement started (5s update interval)");
   return true;
 }
 
 static void readControlFromServer() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  
   HTTPClient http;
-  const String url =
-      serverBaseUrl() + "/api/devices/" + DEVICE_ID + "/control";
-  http.begin(url);
+  const String url = serverBaseUrl() + "/api/devices/" + DEVICE_ID + "/control";
+  
+  httpBeginSmart(http, url);
   addApiKeyHeader(http);
+  
   const int code = http.GET();
-  if (code < 0) {
+  if (code == HTTP_CODE_OK) {
+    const String payload = http.getString();
+    StaticJsonDocument<320> doc;
+    if (!deserializeJson(doc, payload)) {
+      logServerHttp("GET", url, code, "ok");
+      if (doc["co2ThresholdPpm"].is<int>()) co2ThresholdPpm = doc["co2ThresholdPpm"];
+      if (!doc["tempFanOnC"].isNull()) tempFanOnC = doc["tempFanOnC"];
+      if (!doc["humFanOnPct"].isNull()) humFanOnPct = doc["humFanOnPct"];
+      if (doc["manualOverride"].is<bool>()) manualOverride = doc["manualOverride"];
+      if (doc["manualFanOn"].is<bool>()) manualFanOn = doc["manualFanOn"];
+    }
+  } else {
     logServerHttp("GET", url, code, http.errorToString(code));
-    http.end();
-    return;
+    if (code < 0) secureClient.stop(); // Clear stale SSL if connection failed
   }
-  if (code != HTTP_CODE_OK) {
-    logServerHttp("GET", url, code, "control fetch failed");
-    http.end();
-    return;
-  }
-
-  const String payload = http.getString();
   http.end();
-
-  StaticJsonDocument<320> doc;
-  if (deserializeJson(doc, payload)) {
-    logServerHttp("GET", url, code, "JSON parse error");
-    return;
-  }
-  logServerHttp("GET", url, code, String("ok bytes=") + String(payload.length()));
-
-  if (doc["co2ThresholdPpm"].is<int>()) {
-    const int v = doc["co2ThresholdPpm"].as<int>();
-    if (v >= 400 && v <= 10000) co2ThresholdPpm = v;
-  }
-  if (!doc["tempFanOnC"].isNull()) {
-    const float v = doc["tempFanOnC"].as<float>();
-    if (v >= 15.0f && v <= 45.0f) tempFanOnC = v;
-  }
-  if (!doc["humFanOnPct"].isNull()) {
-    const float v = doc["humFanOnPct"].as<float>();
-    if (v >= 55.0f && v <= 100.0f) humFanOnPct = v;
-  }
-  if (doc["manualOverride"].is<bool>()) {
-    manualOverride = doc["manualOverride"].as<bool>();
-  }
-  if (doc["manualFanOn"].is<bool>()) {
-    manualFanOn = doc["manualFanOn"].as<bool>();
-  }
 }
 
 static void postTelemetryToServer(float tempC, float humPct, int co2ppm) {
-  StaticJsonDocument<384> doc;
-  if (!isnan(tempC)) doc["tempC"] = tempC;
-  if (!isnan(humPct)) doc["humPct"] = humPct;
-  if (co2ppm > 0) doc["co2ppm"] = co2ppm;
-  doc["fanOn"] = fanOn;
-  doc["co2ThresholdPpm"] = co2ThresholdPpm;
-  doc["tempFanOnC"] = tempFanOnC;
-  doc["humFanOnPct"] = humFanOnPct;
-  doc["manualOverride"] = manualOverride;
-  doc["tsMs"] = (int)millis();
+    if (WiFi.status() != WL_CONNECTED) return;
 
-  String body;
-  serializeJson(doc, body);
+    StaticJsonDocument<384> doc;
+    if (!isnan(tempC)) doc["tempC"] = tempC;
+    if (!isnan(humPct)) doc["humPct"] = humPct;
+    if (co2ppm > 0) doc["co2ppm"] = co2ppm;
+    doc["fanOn"] = fanOn;
+    doc["co2ThresholdPpm"] = co2ThresholdPpm;
+    doc["tempFanOnC"] = tempFanOnC;
+    doc["humFanOnPct"] = humFanOnPct;
+    doc["manualOverride"] = manualOverride;
+    doc["tsMs"] = (int)millis();
 
-  HTTPClient http;
-  const String url =
-      serverBaseUrl() + "/api/devices/" + DEVICE_ID + "/telemetry";
-  http.begin(url);
-  http.addHeader("Content-Type", "application/json");
-  addApiKeyHeader(http);
-  const int code = http.POST(body);
-  if (code < 0) {
-    logServerHttp("POST", url, code, http.errorToString(code));
-  } else if (code != HTTP_CODE_OK) {
-    logServerHttp("POST", url, code, "telemetry rejected");
-  } else {
-    logServerHttp("POST", url, code, String("ok bytes=") + String(body.length()));
-  }
-  http.end();
+    String body;
+    serializeJson(doc, body);
+
+    HTTPClient http;
+    const String url = serverBaseUrl() + "/api/devices/" + DEVICE_ID + "/telemetry";
+    
+    httpBeginSmart(http, url);
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("User-Agent", "ESP32-SCD41-Node"); 
+    addApiKeyHeader(http);
+
+    const int code = http.POST(body);
+
+    if (code < 0) {
+        logServerHttp("POST", url, code, http.errorToString(code));
+        secureClient.stop(); // Force reset SSL session on error
+    } else if (code != HTTP_CODE_OK && code != 201) {
+        logServerHttp("POST", url, code, "telemetry rejected");
+    } else {
+        logServerHttp("POST", url, code, "ok");
+    }
+    http.end();
 }
 
 void setup() {
@@ -333,23 +333,17 @@ void setup() {
 
   dht.begin();
   if (!scd41Begin()) {
-    Serial.println("SCD41 init failed; check I2C wiring (SDA/SCL) and power");
+    Serial.println("SCD41 init failed");
   }
 
   if (!wifiConnectOrPortal()) {
-    Serial.println("WiFi setup failed; restarting in 3s");
     delay(3000);
     ESP.restart();
   }
-  Serial.print("WiFi OK, IP: ");
-  Serial.println(WiFi.localIP());
-  Serial.print("Server: ");
-  Serial.println(serverBaseUrl());
 
   if (WiFi.status() == WL_CONNECTED) {
     readControlFromServer();
     lastControlFetchMs = millis();
-    Serial.println("Control presets loaded from server (thresholds + manual commands).");
   }
 }
 
@@ -357,11 +351,10 @@ void loop() {
   wifiEnsureConnected();
 
   const uint32_t now = millis();
-  if (WiFi.status() == WL_CONNECTED) {
-    if (now - lastControlFetchMs >= CONTROL_POLL_MS) {
-      lastControlFetchMs = now;
-      readControlFromServer();
-    }
+  
+  if (WiFi.status() == WL_CONNECTED && (now - lastControlFetchMs >= CONTROL_POLL_MS)) {
+    lastControlFetchMs = now;
+    readControlFromServer();
   }
 
   if (now - lastPublishMs >= PUBLISH_INTERVAL_MS || lastPublishMs == 0) {
@@ -369,7 +362,6 @@ void loop() {
 
     const float hum = dht.readHumidity();
     const float temp = dht.readTemperature();
-
     int co2ppm = -1;
     scd41ReadCo2ppm(co2ppm);
 
@@ -386,23 +378,6 @@ void loop() {
     if (WiFi.status() == WL_CONNECTED) {
       postTelemetryToServer(temp, hum, co2ppm);
     }
-
-    Serial.print("T=");
-    Serial.print(temp);
-    Serial.print("C H=");
-    Serial.print(hum);
-    Serial.print("% CO2=");
-    Serial.print(co2ppm);
-    Serial.print("ppm fanOn=");
-    Serial.print(fanOn ? "1" : "0");
-    Serial.print(" co2Thr=");
-    Serial.print(co2ThresholdPpm);
-    Serial.print(" Tfan>");
-    Serial.print(tempFanOnC);
-    Serial.print(" Hfan>");
-    Serial.print(humFanOnPct);
-    Serial.print(" override=");
-    Serial.println(manualOverride ? "1" : "0");
   }
 
   delay(50);

@@ -5,7 +5,6 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useColorScheme } from 'react-native';
 
-import { ensureSignedIn } from './src/lib/firebase';
 import { useDeviceId } from './src/lib/useDeviceId';
 import { registerForPushNotificationsAsync } from './src/lib/pushNotifications';
 import { useUnreadAlerts } from './src/lib/useUnreadAlerts';
@@ -14,6 +13,8 @@ import HistoryScreen from './src/screens/HistoryScreen';
 import NotificationsScreen from './src/screens/NotificationsScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 import { palette } from './src/theme/palette';
+import LoginScreen from './src/screens/LoginScreen';
+import { useLocalSession } from './src/lib/localAuth';
 
 const Tab = createBottomTabNavigator();
 
@@ -35,12 +36,7 @@ export default function App() {
   const scheme = useColorScheme();
   const deviceIdState = useDeviceId();
   const unread = useUnreadAlerts(deviceIdState.deviceId);
-
-  useEffect(() => {
-    ensureSignedIn().catch(() => {
-      // auth failures are surfaced via UI state when reads fail
-    });
-  }, []);
+  const session = useLocalSession();
 
   useEffect(() => {
     if (!deviceIdState.deviceId) return;
@@ -57,6 +53,9 @@ export default function App() {
   return (
     <NavigationContainer theme={theme}>
       <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
+      {session.loading || !session.signedIn ? (
+        <LoginScreen />
+      ) : (
       <Tab.Navigator
         screenOptions={({ route }) => ({
           headerShown: true,
@@ -97,9 +96,10 @@ export default function App() {
           )}
         </Tab.Screen>
         <Tab.Screen name="Settings">
-          {() => <SettingsScreen deviceIdState={deviceIdState} />}
+          {() => <SettingsScreen deviceIdState={deviceIdState} onSignOut={session.signOut} />}
         </Tab.Screen>
       </Tab.Navigator>
+      )}
     </NavigationContainer>
   );
 }

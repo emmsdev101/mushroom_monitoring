@@ -29,5 +29,7 @@
     "react-native-screens": "~4.16.0"
   },
   "private": true,
-  "devDependencies": {}
+  "devDependencies": {
+    "eas-cli": "^18.11.0"
+  }
 }

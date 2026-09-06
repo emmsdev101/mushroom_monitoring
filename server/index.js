@@ -243,7 +243,7 @@ app.get('/health', (req, res) => {
     ok: true,
     hasApiKey: Boolean(API_KEY),
     firebaseControl: fb.isFirebaseReady(),
-    firebaseMode: 'web-sdk+anonymous',
+    firebaseMode: fb.isRtdbDisabled() ? 'memory-only' : 'web-sdk+anonymous',
   });
 });
 

@@ -11,7 +11,7 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { BarChart, LineChart } from 'react-native-gifted-charts';
-import { devicePath, useRtdbValue } from '../lib/rtdb';
+import { devicePath, useApiValue } from '../lib/api';
 import { palette } from '../theme/palette';
 
 /**
@@ -160,7 +160,7 @@ export default function HistoryScreen({ deviceId }) {
   const surface = isDark ? palette.surfaceDark : palette.surfaceLight;
   const border = isDark ? palette.borderDark : palette.borderLight;
 
-  const history = useRtdbValue(devicePath(deviceId, 'history24h'));
+  const history = useApiValue(deviceId ? devicePath(deviceId, 'history24h') : null, { intervalMs: 15000 });
 
   const [chartType, setChartType] = useState('line'); // 'line' | 'bar'
   const [preset, setPreset] = useState('24h'); // '1h' | '6h' | '24h' | 'custom'
@@ -192,7 +192,7 @@ export default function HistoryScreen({ deviceId }) {
     <ScrollView contentContainerStyle={[styles.container, { backgroundColor: bg }]}>
       <Text style={[styles.h1, { color: text }]}>History (24h)</Text>
       <Text style={[styles.p, { color: sub }]}>
-        Choose a chart style and filter by time range. Data comes from `{devicePath(deviceId, 'history24h')}`.
+        Choose a chart style and filter by time range. Data is polled from the Render API.
       </Text>
 
       <View style={[styles.card, { backgroundColor: surface, borderColor: border }]}>
@@ -307,8 +307,7 @@ export default function HistoryScreen({ deviceId }) {
           />
           {!co2Data.length && !tempData.length && !humData.length && (
             <Text style={{ color: sub, fontSize: 12 }}>
-              No data at `{devicePath(deviceId, 'history24h')}` yet. Once the ESP32 posts telemetry through the server,
-              points appear here.
+              No history yet. Once the ESP32 posts telemetry through the server, points appear here.
             </Text>
           )}
         </>

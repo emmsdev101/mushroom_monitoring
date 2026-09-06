@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View, useColorScheme } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
-import { devicePath, useRtdbValue } from '../lib/rtdb';
+import { devicePath, useApiValue } from '../lib/api';
 import { palette } from '../theme/palette';
 
 function fmt(ms) {
@@ -28,7 +28,7 @@ export default function NotificationsScreen({
   const sub = isDark ? palette.subtextDark : palette.subtextLight;
   const border = isDark ? palette.borderDark : palette.borderLight;
 
-  const alerts = useRtdbValue(devicePath(deviceId, 'alerts'));
+  const alerts = useApiValue(deviceId ? devicePath(deviceId, 'alerts') : null, { intervalMs: 8000 });
   const [inbox, setInbox] = useState([]);
 
   useEffect(() => {
@@ -101,7 +101,7 @@ export default function NotificationsScreen({
     <ScrollView contentContainerStyle={[styles.container, { backgroundColor: bg }]}>
       <Text style={[styles.h1, { color: text }]}>Notifications</Text>
       <Text style={[styles.p, { color: sub }]}>
-        Device: {deviceId}. Alerts are created by the server when thresholds are reached and stored at `{devicePath(deviceId, 'alerts')}`.
+        Device: {deviceId}. Alerts are created by the server when readings leave the target range.
       </Text>
 
       <View style={[styles.card, { backgroundColor: surface, borderColor: border }]}>

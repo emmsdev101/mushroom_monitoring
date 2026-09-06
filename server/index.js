@@ -194,6 +194,8 @@ function getOrCreate(deviceId) {
       lastTelemetrySig: '',
       lastPersisted: null,
       historyBackfilled: false,
+      alerts: {},
+      pushTokens: {},
       alertState: {},
     };
     devices.set(deviceId, state);
@@ -500,8 +502,12 @@ app.post('/api/devices/:deviceId/telemetry', auth, (req, res) => {
         alerts.map((a) => `${a.type} value=${a.value} thr=${a.thr}`).join(' | ')
     );
     fb.getPushTokens(deviceId)
+      .catch((e) => {
+        console.warn('[push] token lookup failed:', e.message);
+        return [];
+      })
       .then(async (tokenObjs) => {
-        const pushTokens = tokenObjs.map((x) => x.token).filter(Boolean);
+        const pushTokens = tokensForDevice(d, tokenObjs);
         console.log(`[alert] device=${deviceId} pushTokens=${pushTokens.length}`);
         for (const a of alerts) {
           // Cooldowns are per metric (co2/temp/hum), not per direction, so a
@@ -523,16 +529,14 @@ app.post('/api/devices/:deviceId/telemetry', auth, (req, res) => {
                 ? `Temp ${direction}: ${a.value.toFixed(1)} °C (${isLow ? 'min' : 'max'} ${a.thr})`
                 : `Humidity ${direction}: ${a.value.toFixed(0)}% (${isLow ? 'min' : 'max'} ${a.thr})`;
           // Save alert entry for the app to display (even if push tokens are missing).
-          fb.appendAlert(deviceId, {
+          recordAlert(deviceId, d, {
             tsMs: now,
             type: a.type,
             title,
             body,
             value: a.value,
             threshold: a.thr,
-          })
-            .then(() => console.log(`[alert] device=${deviceId} appended type=${a.type}`))
-            .catch((e) => console.warn('[push] appendAlert failed:', e.message));
+          }).then(() => console.log(`[alert] device=${deviceId} appended type=${a.type}`));
 
           if (pushTokens.length) {
             await sendExpoPush(pushTokens, title, body, { deviceId, type: a.type, value: a.value, threshold: a.thr });
@@ -540,13 +544,17 @@ app.post('/api/devices/:deviceId/telemetry', auth, (req, res) => {
           d.alertState[key] = { above: true, lastSentMs: now };
         }
       })
-      .catch((e) => console.warn('[push] token lookup failed:', e.message));
+      .catch((e) => console.warn('[push] high-alert loop failed:', e.message));
   } else {
     // Send a single "back to normal" alert on transition from above->below.
     const stNow = currentThresholdState(d, b);
     fb.getPushTokens(deviceId)
+      .catch((e) => {
+        console.warn('[push] token lookup failed:', e.message);
+        return [];
+      })
       .then(async (tokenObjs) => {
-        const pushTokens = tokenObjs.map((x) => x.token).filter(Boolean);
+        const pushTokens = tokensForDevice(d, tokenObjs);
         for (const key of ['co2', 'temp', 'hum']) {
           const prev = d.alertState[key] || { above: false, lastSentMs: 0 };
           const cur = stNow[key];
@@ -562,16 +570,14 @@ app.post('/api/devices/:deviceId/telemetry', auth, (req, res) => {
                 ? `Temp back to normal: ${cur.value != null ? cur.value.toFixed(1) : '-'} °C (threshold ${cur.thr})`
                 : `Humidity back to normal: ${cur.value != null ? cur.value.toFixed(0) : '-'}% (threshold ${cur.thr})`;
 
-          await fb
-            .appendAlert(deviceId, {
-              tsMs: now,
-              type: `${key}_normal`,
-              title,
-              body,
-              value: cur.value ?? null,
-              threshold: cur.thr ?? null,
-            })
-            .catch((e) => console.warn('[push] appendAlert failed:', e.message));
+          await recordAlert(deviceId, d, {
+            tsMs: now,
+            type: `${key}_normal`,
+            title,
+            body,
+            value: cur.value ?? null,
+            threshold: cur.thr ?? null,
+          });
 
           if (pushTokens.length && now - prev.lastSentMs >= ALERT_COOLDOWN_MS) {
             await sendExpoPush(pushTokens, title, body, { deviceId, type: `${key}_normal`, value: cur.value, threshold: cur.thr });
@@ -580,7 +586,7 @@ app.post('/api/devices/:deviceId/telemetry', auth, (req, res) => {
           d.alertState[key] = { above: false, lastSentMs: now };
         }
       })
-      .catch((e) => console.warn('[push] token lookup failed:', e.message));
+      .catch((e) => console.warn('[push] recovery-alert loop failed:', e.message));
   }
 
   const client =
@@ -607,6 +613,71 @@ app.get('/api/devices/:deviceId/live', auth, (req, res) => {
 app.get('/api/devices/:deviceId/history24h', auth, (req, res) => {
   const d = getOrCreate(req.params.deviceId);
   res.json(history24hPayload(d));
+});
+
+function rememberAlert(d, alert) {
+  const key = `a${alert.tsMs}_${Object.keys(d.alerts).length}`;
+  d.alerts[key] = alert;
+  const keys = Object.keys(d.alerts);
+  if (keys.length > 200) {
+    keys
+      .sort((a, b) => (d.alerts[a].tsMs || 0) - (d.alerts[b].tsMs || 0))
+      .slice(0, keys.length - 200)
+      .forEach((k) => delete d.alerts[k]);
+  }
+  return key;
+}
+
+function recordAlert(deviceId, d, alert) {
+  rememberAlert(d, alert);
+  return fb.appendAlert(deviceId, alert).catch((e) => {
+    console.warn('[push] appendAlert failed:', e.message);
+  });
+}
+
+function tokensForDevice(d, fromFb) {
+  const mem = Object.values(d.pushTokens || {})
+    .filter((x) => x && typeof x.token === 'string' && x.token.length > 0)
+    .map((x) => x.token);
+  const fbTokens = (fromFb || []).map((x) => x.token).filter(Boolean);
+  return [...new Set([...mem, ...fbTokens])];
+}
+
+app.get('/api/devices/:deviceId/alerts', auth, async (req, res) => {
+  const d = getOrCreate(req.params.deviceId);
+  if (Object.keys(d.alerts).length === 0) {
+    try {
+      const fromFb = await fb.readAlerts(req.params.deviceId);
+      if (fromFb && typeof fromFb === 'object') d.alerts = { ...fromFb };
+    } catch (e) {
+      console.warn('[alerts] read failed:', e.message);
+    }
+  }
+  res.json(d.alerts || {});
+});
+
+app.post('/api/devices/:deviceId/pushTokens', auth, async (req, res) => {
+  const deviceId = req.params.deviceId;
+  const d = getOrCreate(deviceId);
+  const b = req.body || {};
+  if (typeof b.token !== 'string' || b.token.length === 0) {
+    return res.status(400).json({ error: 'token (string) is required' });
+  }
+  const key = String(b.token).replace(/[.#$\[\]/]/g, '_');
+  d.pushTokens[key] = {
+    token: b.token,
+    platform: typeof b.platform === 'string' ? b.platform : undefined,
+    updatedAtMs: Date.now(),
+  };
+  try {
+    await fb.upsertPushToken(deviceId, {
+      token: b.token,
+      platform: typeof b.platform === 'string' ? b.platform : undefined,
+    });
+  } catch (e) {
+    console.warn('[pushTokens] firebase upsert failed (kept in memory):', e.message);
+  }
+  res.json({ ok: true, key });
 });
 
 app.listen(PORT, '0.0.0.0', () => {

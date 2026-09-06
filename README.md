@@ -5,7 +5,7 @@ This repo follows `implementation_plan.md`: grow-room sensors, relay control, an
 ### Components
 - **arduino/MushroomNursery/**: ESP32 sketch for **Arduino IDE** — DHT + **Sensirion SCD41** (I²C CO₂), relay, **WiFiManager**, HTTP to **`server/`**.
 - **server/**: Node (Express) service — telemetry ingest, control state, in-memory history.
-- **mobile-app/**: Expo app (still wired to **Firebase** in code until you point it at `server/` or mirror from Node).
+- **mobile-app/**: Expo app — polls the **`server/`** HTTP API on Render (no direct Firebase access).
 - **firebase/**: Optional / future.
 
 ### Quick start

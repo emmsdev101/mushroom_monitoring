@@ -286,6 +286,43 @@ async function appendAlert(deviceId, alert) {
 }
 
 /**
+ * Read all alerts for a device (as an object keyed by push id, matching the
+ * shape the mobile app already consumes). Best-effort — returns {} on error.
+ * @param {string} deviceId
+ * @returns {Promise<Record<string, object>>}
+ */
+async function readAlerts(deviceId) {
+  if (!deviceId) return {};
+  const { db } = await getFirebaseContext();
+  const snap = await get(ref(db, `devices/${deviceId}/alerts`));
+  if (!snap.exists()) return {};
+  const v = snap.val();
+  return v && typeof v === 'object' ? v : {};
+}
+
+/**
+ * Upsert a mobile push token under devices/<id>/pushTokens/<safeKey>. The key
+ * is derived from the token so repeat registrations don't duplicate entries.
+ * @param {string} deviceId
+ * @param {{ token: string, platform?: string }} tokenInfo
+ * @returns {Promise<string>} the safe key used
+ */
+async function upsertPushToken(deviceId, tokenInfo) {
+  if (!deviceId || !tokenInfo || typeof tokenInfo.token !== 'string') {
+    throw new Error('deviceId and token are required');
+  }
+  const { db } = await getFirebaseContext();
+  // RTDB keys can't contain . # $ [ ] /  — same sanitisation the app used.
+  const safeKey = tokenInfo.token.replace(/[.#$\[\]\/]/g, '_');
+  await set(ref(db, `devices/${deviceId}/pushTokens/${safeKey}`), {
+    token: tokenInfo.token,
+    platform: typeof tokenInfo.platform === 'string' ? tokenInfo.platform : null,
+    updatedAtMs: Date.now(),
+  });
+  return safeKey;
+}
+
+/**
  * @param {string} deviceId
  * @returns {Promise<Array<{ token: string, platform?: string }>>}
  */
@@ -322,6 +359,8 @@ module.exports = {
   pushHistoryPoint,
   loadRecentHistory,
   appendAlert,
+  readAlerts,
+  upsertPushToken,
   getPushTokens,
   removePushTokenKey,
   isFirebaseReady,

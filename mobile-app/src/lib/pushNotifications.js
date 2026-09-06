@@ -1,7 +1,7 @@
 import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
-import { devicePath, rtdbSet } from './rtdb';
+import { apiPost, devicePath } from './api';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -10,11 +10,6 @@ Notifications.setNotificationHandler({
     shouldSetBadge: false,
   }),
 });
-
-function tokenKey(token) {
-  // RTDB keys can't contain . # $ [ ] / so replace them.
-  return String(token).replace(/[.#$\[\]\/]/g, '_');
-}
 
 export async function registerForPushNotificationsAsync(deviceId) {
   if (!deviceId) return null;
@@ -47,11 +42,9 @@ export async function registerForPushNotificationsAsync(deviceId) {
   const token = tokenRes?.data;
   if (!token) return null;
 
-  const key = tokenKey(token);
-  await rtdbSet(devicePath(deviceId, `pushTokens/${key}`), {
+  await apiPost(devicePath(deviceId, 'pushTokens'), {
     token,
     platform: Platform.OS,
-    updatedAtMs: Date.now(),
   });
 
   return token;

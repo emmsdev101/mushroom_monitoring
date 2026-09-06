@@ -1,13 +1,13 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { devicePath, useRtdbValue } from './rtdb';
+import { devicePath, useApiValue } from './api';
 
 function keyFor(deviceId) {
   return `mushroomNursery.alertsReadKeys.${deviceId || 'unknown'}`;
 }
 
 export function useUnreadAlerts(deviceId) {
-  const alerts = useRtdbValue(devicePath(deviceId, 'alerts'));
+  const alerts = useApiValue(deviceId ? devicePath(deviceId, 'alerts') : null, { intervalMs: 10000 });
   const [readKeys, setReadKeys] = useState({});
 
   useEffect(() => {

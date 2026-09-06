@@ -1,6 +1,6 @@
 ## Mobile App (Expo / React Native)
 
-The ESP32 firmware uses the **`server/`** HTTP API. This app is still configured for **Firebase** in `src/lib/firebase.js` until you switch it to call the same REST endpoints as the server (or add Firebase mirroring in Node).
+Talks to the **`server/`** HTTP API on Render. The ESP32 uses the same API. Firebase is only used on the server (mirroring), not by this app.
 
 ### Setup
 1. Install dependencies:
@@ -10,13 +10,13 @@ cd mobile-app
 npm install
 ```
 
-2. Fill Firebase config in `src/lib/firebase.js`.
+2. Confirm the Render URL in **Settings → Server** (default: `https://mushroom-nursery-server.onrender.com`). If the server has `API_KEY` set, enter the same key there.
 
 ### Run
 - Android (via Expo): `npm run android`
 - Dev server: `npm start`
 
-### Realtime DB paths used
-- **Reads**: `/devices/<deviceId>/live`, `/devices/<deviceId>/heartbeatServerMs`, `/devices/<deviceId>/control/*`
-- **Writes**: `/devices/<deviceId>/control/*` (manual override + threshold)
-
+### API endpoints used
+- **GET** `/api/devices/<id>/live`, `/control`, `/history24h`, `/alerts`
+- **PUT** `/api/devices/<id>/control`
+- **POST** `/api/devices/<id>/pushTokens`

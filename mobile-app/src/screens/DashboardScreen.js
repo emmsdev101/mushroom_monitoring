@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View, useColorScheme } from 'react-native';
 import MetricCard from '../components/MetricCard';
 import StatusCard from '../components/StatusCard';
-import { devicePath, useRtdbValue } from '../lib/rtdb';
+import { devicePath, useApiValue } from '../lib/api';
 import { palette } from '../theme/palette';
 
 function formatAge(ms) {
@@ -67,10 +67,8 @@ export default function DashboardScreen({ deviceId }) {
   const scheme = useColorScheme();
   const isDark = scheme === 'dark';
 
-  const live = useRtdbValue(devicePath(deviceId, 'live'));
-  const control = useRtdbValue(devicePath(deviceId, 'control'));
-  const heartbeat = useRtdbValue(devicePath(deviceId, 'heartbeatServerMs'));
-  const heartbeatFallback = useRtdbValue(devicePath(deviceId, 'heartbeatMs'));
+  const live = useApiValue(deviceId ? devicePath(deviceId, 'live') : null, { intervalMs: 3000 });
+  const control = useApiValue(deviceId ? devicePath(deviceId, 'control') : null, { intervalMs: 5000 });
 
   const bg = isDark ? palette.bgDark : palette.bgLight;
   const text = isDark ? palette.textDark : palette.textLight;
@@ -99,13 +97,12 @@ export default function DashboardScreen({ deviceId }) {
     const humMinPct = typeof c.humMinPct === 'number' ? c.humMinPct : null;
     const co2MinPpm = typeof c.co2MinPpm === 'number' ? c.co2MinPpm : null;
 
-    const hb = typeof heartbeat.value === 'number' ? heartbeat.value : null;
-    const hbFb = typeof heartbeatFallback.value === 'number' ? heartbeatFallback.value : null;
-
-    const ts = hb ?? (typeof v.tsServerMs === 'number' ? v.tsServerMs : null);
+    // Heartbeat is folded into the live payload as `serverTsMs` (set by the
+    // Node server on every telemetry POST). No separate endpoint needed.
+    const ts = typeof v.serverTsMs === 'number' ? v.serverTsMs : null;
     const age = ts != null ? Date.now() - ts : null;
 
-    const online = ts != null ? age < 90000 : hbFb != null || v.tsMs != null;
+    const online = ts != null ? age < 90000 : v.tsMs != null;
 
     return {
       tempC,
@@ -125,7 +122,7 @@ export default function DashboardScreen({ deviceId }) {
       lastSeenText:
         ts != null ? `Last update: ${formatAge(age)}` : 'Last update: (waiting for device heartbeat)',
     };
-  }, [live.value, control.value, heartbeat.value, heartbeatFallback.value]);
+  }, [live.value, control.value]);
 
   if (live.loading) {
     return (

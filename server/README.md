@@ -119,7 +119,9 @@ Tighten rules before any real deployment.
 | PUT | `/api/devices/:id/control` | Merges into RTDB `control` (falls back to in-memory if Firebase fails) |
 | POST | `/api/devices/:id/telemetry` | ESP32 snapshot; mirrors `live`, `heartbeatServerMs`, and `history24h` to RTDB |
 | GET | `/api/devices/:id/live` | Latest telemetry (in-memory on server) |
-| GET | `/api/devices/:id/history24h` | Last 24h points (in-memory; resets on restart) |
+| GET | `/api/devices/:id/history24h` | Last 24h points (in-memory; backfilled from RTDB) |
+| GET | `/api/devices/:id/alerts` | Alert log (in-memory + RTDB) |
+| POST | `/api/devices/:id/pushTokens` | Register Expo push token for this device |
 
 ## Control JSON (`GET` `/api/devices/:id/control`)
 

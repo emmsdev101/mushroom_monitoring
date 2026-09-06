@@ -12,7 +12,8 @@ import {
   View,
   useColorScheme,
 } from 'react-native';
-import { devicePath, rtdbSet, useRtdbValue } from '../lib/rtdb';
+import { apiPut, devicePath, useApiValue } from '../lib/api';
+import { DEFAULT_SERVER_BASE_URL, useServerConfig } from '../lib/config';
 import { palette } from '../theme/palette';
 
 import { changeLocalCreds, getLocalCreds } from '../lib/localAuth';
@@ -27,7 +28,20 @@ export default function SettingsScreen({ deviceIdState, onSignOut }) {
   const border = isDark ? palette.borderDark : palette.borderLight;
 
   const { deviceId, setDeviceId, loading: deviceIdLoading } = deviceIdState;
-  const control = useRtdbValue(devicePath(deviceId, 'control'));
+  const control = useApiValue(deviceId ? devicePath(deviceId, 'control') : null, { intervalMs: 8000 });
+  const serverConfig = useServerConfig();
+
+  // Server-connection fields — local state until the user hits Save.
+  const [pendingServerUrl, setPendingServerUrl] = useState('');
+  const [pendingApiKey, setPendingApiKey] = useState('');
+  const [savingServer, setSavingServer] = useState(false);
+
+  useEffect(() => {
+    if (serverConfig.hydrated) {
+      setPendingServerUrl(serverConfig.baseUrl || '');
+      setPendingApiKey(serverConfig.apiKey || '');
+    }
+  }, [serverConfig.hydrated, serverConfig.baseUrl, serverConfig.apiKey]);
 
   const [pendingDeviceId, setPendingDeviceId] = useState(deviceId);
   // Upper bounds (fan-on above)
@@ -245,43 +259,70 @@ export default function SettingsScreen({ deviceIdState, onSignOut }) {
       const sMax = sprinklerMaxOnSec.trim() === '' ? DEFAULTS.sprinklerMaxOn : Number(sprinklerMaxOnSec);
       const sMin = sprinklerMinOffSec.trim() === '' ? DEFAULTS.sprinklerMinOff : Number(sprinklerMinOffSec);
 
-      await rtdbSet(devicePath(nextDeviceId, 'control/co2ThresholdPpm'), thr);
-      await rtdbSet(devicePath(nextDeviceId, 'control/tempFanOnC'), tFan);
-      await rtdbSet(devicePath(nextDeviceId, 'control/humFanOnPct'), hFan);
-      await rtdbSet(devicePath(nextDeviceId, 'control/co2MinPpm'), co2Lo);
-      await rtdbSet(devicePath(nextDeviceId, 'control/tempMinC'), tLo);
-      await rtdbSet(devicePath(nextDeviceId, 'control/humMinPct'), hLo);
-      await rtdbSet(devicePath(nextDeviceId, 'control/manualOverride'), manualOverride);
-      await rtdbSet(devicePath(nextDeviceId, 'control/manualFanOn'), manualFanOn);
-
-      await rtdbSet(devicePath(nextDeviceId, 'control/intakeFanEnabled'), intakeFanEnabled);
-      await rtdbSet(devicePath(nextDeviceId, 'control/manualIntakeFanOverride'), manualIntakeFanOverride);
-      await rtdbSet(devicePath(nextDeviceId, 'control/manualIntakeFanOn'), manualIntakeFanOn);
-
-      await rtdbSet(devicePath(nextDeviceId, 'control/sprinklerEnabled'), sprinklerEnabled);
-      await rtdbSet(devicePath(nextDeviceId, 'control/sprinklerOnHumPct'), sOn);
-      await rtdbSet(devicePath(nextDeviceId, 'control/sprinklerOffHumPct'), sOff);
-      await rtdbSet(devicePath(nextDeviceId, 'control/sprinklerMaxOnSec'), sMax);
-      await rtdbSet(devicePath(nextDeviceId, 'control/sprinklerMinOffSec'), sMin);
-      await rtdbSet(devicePath(nextDeviceId, 'control/manualSprinklerOverride'), manualSprinklerOverride);
-      await rtdbSet(devicePath(nextDeviceId, 'control/manualSprinklerOn'), manualSprinklerOn);
-
       const heatOn = heaterOnTempC.trim() === '' ? DEFAULTS.heaterOn : Number(heaterOnTempC);
       const heatOff = heaterOffTempC.trim() === '' ? DEFAULTS.heaterOff : Number(heaterOffTempC);
       const heatMax = heaterMaxOnSec.trim() === '' ? DEFAULTS.heaterMaxOn : Number(heaterMaxOnSec);
       const heatMin = heaterMinOffSec.trim() === '' ? DEFAULTS.heaterMinOff : Number(heaterMinOffSec);
 
-      await rtdbSet(devicePath(nextDeviceId, 'control/heaterEnabled'), heaterEnabled);
-      await rtdbSet(devicePath(nextDeviceId, 'control/heaterOnTempC'), heatOn);
-      await rtdbSet(devicePath(nextDeviceId, 'control/heaterOffTempC'), heatOff);
-      await rtdbSet(devicePath(nextDeviceId, 'control/heaterMaxOnSec'), heatMax);
-      await rtdbSet(devicePath(nextDeviceId, 'control/heaterMinOffSec'), heatMin);
-      await rtdbSet(devicePath(nextDeviceId, 'control/manualHeaterOverride'), manualHeaterOverride);
-      await rtdbSet(devicePath(nextDeviceId, 'control/manualHeaterOn'), manualHeaterOn);
+      // One PUT with the whole control payload — server merges + validates.
+      await apiPut(devicePath(nextDeviceId, 'control'), {
+        co2ThresholdPpm: thr,
+        tempFanOnC: tFan,
+        humFanOnPct: hFan,
+        co2MinPpm: co2Lo,
+        tempMinC: tLo,
+        humMinPct: hLo,
+        manualOverride,
+        manualFanOn,
+
+        intakeFanEnabled,
+        manualIntakeFanOverride,
+        manualIntakeFanOn,
+
+        sprinklerEnabled,
+        sprinklerOnHumPct: sOn,
+        sprinklerOffHumPct: sOff,
+        sprinklerMaxOnSec: sMax,
+        sprinklerMinOffSec: sMin,
+        manualSprinklerOverride,
+        manualSprinklerOn,
+
+        heaterEnabled,
+        heaterOnTempC: heatOn,
+        heaterOffTempC: heatOff,
+        heaterMaxOnSec: heatMax,
+        heaterMinOffSec: heatMin,
+        manualHeaterOverride,
+        manualHeaterOn,
+      });
+      // Refresh so the UI reflects the server's normalized values.
+      control.refresh?.();
     } catch (e) {
       Alert.alert('Save failed', String(e?.message || e));
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function saveServerConfig() {
+    const url = pendingServerUrl.trim();
+    if (!url) {
+      Alert.alert('Invalid server URL', 'URL cannot be empty.');
+      return;
+    }
+    if (!/^https?:\/\//i.test(url)) {
+      Alert.alert('Invalid server URL', 'URL must start with http:// or https://');
+      return;
+    }
+    setSavingServer(true);
+    try {
+      await serverConfig.update({ baseUrl: url, apiKey: pendingApiKey });
+      Alert.alert('Saved', 'Server configuration updated. Data will refresh momentarily.');
+      control.refresh?.();
+    } catch (e) {
+      Alert.alert('Save failed', String(e?.message || e));
+    } finally {
+      setSavingServer(false);
     }
   }
 
@@ -299,8 +340,8 @@ export default function SettingsScreen({ deviceIdState, onSignOut }) {
       <ScrollView contentContainerStyle={[styles.container, { backgroundColor: bg }]}>
         <Text style={[styles.h1, { color: text }]}>Settings</Text>
         <Text style={[styles.p, { color: sub }]}>
-          Thresholds and fan override are stored in Firebase. The Node server reads them and the ESP32 pulls commands
-          from the server.
+          Thresholds and fan override are saved through the Render API. The ESP32 pulls the same commands from the
+          server.
         </Text>
 
         <View style={[styles.card, { backgroundColor: surface, borderColor: border }]}>

@@ -1,4 +1,5 @@
 import { StyleSheet, Text, View } from 'react-native';
+import { FEATURES } from '../lib/features';
 import { palette } from '../theme/palette';
 import { useColorScheme } from 'react-native';
 
@@ -14,7 +15,15 @@ function ActuatorPill({ label, on, isDark }) {
   );
 }
 
-export default function StatusCard({ online, lastSeenText, fanOn, intakeFanOn, sprinklerOn, heaterOn }) {
+export default function StatusCard({
+  online,
+  lastSeenText,
+  fanOn,
+  intakeFanOn,
+  sprinklerOn,
+  heaterOn,
+  control,
+}) {
   const scheme = useColorScheme();
   const isDark = scheme === 'dark';
 
@@ -31,10 +40,28 @@ export default function StatusCard({ online, lastSeenText, fanOn, intakeFanOn, s
         <Text style={[styles.label, { color: text }]}>{online ? 'Online' : 'Offline'}</Text>
       </View>
       <View style={styles.pillRow}>
-        <ActuatorPill label="Exhaust" on={!!fanOn} isDark={isDark} />
-        <ActuatorPill label="Intake" on={!!intakeFanOn} isDark={isDark} />
-        <ActuatorPill label="Sprinkler" on={!!sprinklerOn} isDark={isDark} />
-        <ActuatorPill label="Heater" on={!!heaterOn} isDark={isDark} />
+        <ActuatorPill
+          label="Exhaust"
+          on={control?.manualOverride ? !!control.manualFanOn : !!fanOn}
+          isDark={isDark}
+        />
+        <ActuatorPill
+          label="Intake"
+          on={control?.manualIntakeFanOverride ? !!control.manualIntakeFanOn : !!intakeFanOn}
+          isDark={isDark}
+        />
+        <ActuatorPill
+          label="Sprinkler"
+          on={control?.manualSprinklerOverride ? !!control.manualSprinklerOn : !!sprinklerOn}
+          isDark={isDark}
+        />
+        {FEATURES.heater ? (
+          <ActuatorPill
+            label="Heater"
+            on={control?.manualHeaterOverride ? !!control.manualHeaterOn : !!heaterOn}
+            isDark={isDark}
+          />
+        ) : null}
       </View>
       <Text style={[styles.sub, { color: sub }]}>{lastSeenText}</Text>
     </View>

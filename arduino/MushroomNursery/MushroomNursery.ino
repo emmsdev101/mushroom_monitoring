@@ -107,10 +107,14 @@ static SensirionI2cScd4x scd4x;
 static WiFiManager wifiManager;
 
 static const uint32_t PUBLISH_INTERVAL_MS = 5000;
-static const uint32_t CONTROL_POLL_MS = 3000;
+static const uint32_t CONTROL_POLL_MS = 1000;
+static const uint32_t CONTROL_HTTP_TIMEOUT_MS = 5000;
+static const uint32_t TELEMETRY_HTTP_TIMEOUT_MS = 30000;
 static uint32_t lastPublishMs = 0;
 static uint32_t lastControlFetchMs = 0;
 static int lastCo2ppm = -1;
+static float lastTempC = NAN;
+static float lastHumPct = NAN;
 
 static int co2ThresholdPpm = DEFAULT_CO2_THRESHOLD_PPM;
 static float tempFanOnC = DEFAULT_TEMP_FAN_ON_C;
@@ -209,18 +213,17 @@ static void addApiKeyHeader(HTTPClient &http) {
   }
 }
 
-static void httpBeginSmart(HTTPClient &http, const String &url) {
+static void httpBeginSmart(HTTPClient &http, const String &url, uint32_t timeoutMs = TELEMETRY_HTTP_TIMEOUT_MS) {
     if (url.startsWith("https://")) {
         secureClient.setInsecure();
-        // Render free tier can take 30s+ to wake up from cold sleep
-        secureClient.setTimeout(30000); 
+        secureClient.setTimeout(timeoutMs);
         http.begin(secureClient, url);
     } else {
         http.begin(url);
     }
 
     http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-    http.setTimeout(30000);
+    http.setTimeout(timeoutMs);
     http.useHTTP10(false); // Modern cloud hosts prefer HTTP/1.1
 }
 
@@ -368,13 +371,91 @@ static bool scd41Begin() {
   return true;
 }
 
+static void applyActuators(float temp, float hum, int co2ppm) {
+    const bool coldNow = !isnan(temp) && temp < tempMinC;
+
+    bool desiredFanOn = false;
+    if (manualOverride) {
+      desiredFanOn = manualFanOn;
+    } else {
+      if (co2ppm > 0 && co2ppm > co2ThresholdPpm) desiredFanOn = true;
+      if (!isnan(temp) && temp > tempFanOnC) desiredFanOn = true;
+      if (!coldNow && !isnan(hum) && hum > humFanOnPct) desiredFanOn = true;
+    }
+    if (desiredFanOn != fanOn) setRelay(desiredFanOn);
+
+    bool desiredIntakeOn = false;
+    if (manualIntakeFanOverride) {
+      desiredIntakeOn = manualIntakeFanOn;
+    } else if (intakeFanEnabled) {
+      if (co2ppm > 0 && co2ppm > co2ThresholdPpm) desiredIntakeOn = true;
+      if (!isnan(temp) && temp > tempFanOnC) desiredIntakeOn = true;
+    }
+#if INTAKE_FAN_PIN >= 0
+    if (desiredIntakeOn != intakeFanOn) setIntakeRelay(desiredIntakeOn);
+#else
+    if (intakeFanOn) intakeFanOn = false;
+#endif
+
+    bool desiredSprinklerOn = sprinklerOn;
+    const uint32_t nowMs = millis();
+    if (manualSprinklerOverride) {
+      desiredSprinklerOn = manualSprinklerOn;
+    } else if (!sprinklerEnabled) {
+      desiredSprinklerOn = false;
+    } else if (coldNow) {
+      desiredSprinklerOn = false;
+    } else if (isnan(hum)) {
+      desiredSprinklerOn = false;
+    } else if (sprinklerOn) {
+      const bool humRecovered = hum >= sprinklerOffHumPct;
+      const bool maxBurstElapsed = (nowMs - sprinklerOnStartMs) >= sprinklerMaxOnSec * 1000UL;
+      if (humRecovered || maxBurstElapsed) desiredSprinklerOn = false;
+    } else {
+      const bool humLow = hum <= sprinklerOnHumPct;
+      const bool cooldownOk =
+          sprinklerLastOffMs == 0 ||
+          (nowMs - sprinklerLastOffMs) >= sprinklerMinOffSec * 1000UL;
+      if (humLow && cooldownOk) desiredSprinklerOn = true;
+    }
+#if SPRINKLER_PIN >= 0
+    if (desiredSprinklerOn != sprinklerOn) setSprinklerRelay(desiredSprinklerOn);
+#else
+    if (sprinklerOn) sprinklerOn = false;
+#endif
+
+    bool desiredHeaterOn = heaterOn;
+    if (manualHeaterOverride) {
+      desiredHeaterOn = manualHeaterOn;
+    } else if (!heaterEnabled) {
+      desiredHeaterOn = false;
+    } else if (isnan(temp)) {
+      desiredHeaterOn = false;
+    } else if (heaterOn) {
+      const bool tempRecovered = temp >= heaterOffTempC;
+      const bool maxBurstElapsed = (nowMs - heaterOnStartMs) >= heaterMaxOnSec * 1000UL;
+      if (tempRecovered || maxBurstElapsed) desiredHeaterOn = false;
+    } else {
+      const bool tempLow = temp <= heaterOnTempC;
+      const bool cooldownOk =
+          heaterLastOffMs == 0 ||
+          (nowMs - heaterLastOffMs) >= heaterMinOffSec * 1000UL;
+      if (tempLow && cooldownOk) desiredHeaterOn = true;
+    }
+#if HEATER_PIN >= 0
+    if (desiredHeaterOn != heaterOn) setHeaterRelay(desiredHeaterOn);
+#else
+    if (heaterOn) heaterOn = false;
+#endif
+}
+
 static void readControlFromServer() {
   if (WiFi.status() != WL_CONNECTED) return;
   
   HTTPClient http;
   const String url = serverBaseUrl() + "/api/devices/" + DEVICE_ID + "/control";
   
-  httpBeginSmart(http, url);
+  httpBeginSmart(http, url, CONTROL_HTTP_TIMEOUT_MS);
   addApiKeyHeader(http);
   
   const int code = http.GET();
@@ -413,6 +494,7 @@ static void readControlFromServer() {
       if (doc["heaterMinOffSec"].is<int>()) heaterMinOffSec = (uint32_t)(int)doc["heaterMinOffSec"];
       if (doc["manualHeaterOverride"].is<bool>()) manualHeaterOverride = doc["manualHeaterOverride"];
       if (doc["manualHeaterOn"].is<bool>()) manualHeaterOn = doc["manualHeaterOn"];
+      applyActuators(lastTempC, lastHumPct, lastCo2ppm);
     }
   } else {
     logServerHttp("GET", url, code, http.errorToString(code));
@@ -444,7 +526,7 @@ static void postTelemetryToServer(float tempC, float humPct, int co2ppm) {
     HTTPClient http;
     const String url = serverBaseUrl() + "/api/devices/" + DEVICE_ID + "/telemetry";
     
-    httpBeginSmart(http, url);
+    httpBeginSmart(http, url, TELEMETRY_HTTP_TIMEOUT_MS);
     http.addHeader("Content-Type", "application/json");
     http.addHeader("User-Agent", "ESP32-SCD41-Node"); 
     addApiKeyHeader(http);
@@ -512,110 +594,13 @@ void loop() {
   if (now - lastPublishMs >= PUBLISH_INTERVAL_MS || lastPublishMs == 0) {
     lastPublishMs = now;
 
-    const float hum = dht.readHumidity();
-    const float temp = dht.readTemperature();
-    int co2ppm = -1;
-    scd41ReadCo2ppm(co2ppm);
-
-    // "Cold" means below the lower alert bound. When cold, actuators that
-    // would remove heat or add evaporative cooling are inhibited so they
-    // don't fight the heater — except CO2 safety, which always wins because
-    // mushrooms need fresh air more urgently than a warm room.
-    const bool coldNow = !isnan(temp) && temp < tempMinC;
-
-    // Exhaust fan.
-    bool desiredFanOn = false;
-    if (manualOverride) {
-      desiredFanOn = manualFanOn;
-    } else {
-      if (co2ppm > 0 && co2ppm > co2ThresholdPpm) desiredFanOn = true;   // safety, always
-      if (!isnan(temp) && temp > tempFanOnC) desiredFanOn = true;         // won't happen when cold
-      if (!coldNow && !isnan(hum) && hum > humFanOnPct) desiredFanOn = true; // suppressed if cold
-    }
-    if (desiredFanOn != fanOn) setRelay(desiredFanOn);
-
-    // Intake fan — independent of exhaust. Triggers on CO2 or temp above max
-    // (fresh outside air is ~400 ppm and typically cooler than a grow room).
-    // Deliberately not triggered by high humidity: that's the exhaust's job.
-    bool desiredIntakeOn = false;
-    if (manualIntakeFanOverride) {
-      desiredIntakeOn = manualIntakeFanOn;
-    } else if (intakeFanEnabled) {
-      if (co2ppm > 0 && co2ppm > co2ThresholdPpm) desiredIntakeOn = true;
-      if (!isnan(temp) && temp > tempFanOnC) desiredIntakeOn = true;
-    }
-#if INTAKE_FAN_PIN >= 0
-    if (desiredIntakeOn != intakeFanOn) setIntakeRelay(desiredIntakeOn);
-#else
-    // Pin not wired — keep reported state at false so the dashboard is honest.
-    if (intakeFanOn) intakeFanOn = false;
-#endif
-
-    // Sprinkler / mister — hysteresis + safety timers.
-    //  * turn ON  when hum <= sprinklerOnHumPct AND cooldown satisfied
-    //  * turn OFF when hum >= sprinklerOffHumPct OR max burst elapsed
-    // Manual override wins; if enabled==false, forced off.
-    bool desiredSprinklerOn = sprinklerOn;
-    const uint32_t nowMs = millis();
-    if (manualSprinklerOverride) {
-      desiredSprinklerOn = manualSprinklerOn;
-    } else if (!sprinklerEnabled) {
-      desiredSprinklerOn = false;
-    } else if (coldNow) {
-      // Cold priority: never add evaporative cooling while the heater is
-      // trying to warm the room. Humidity correction resumes after recovery.
-      desiredSprinklerOn = false;
-    } else if (isnan(hum)) {
-      // No humidity reading — safest to leave it off (avoid runaway soak).
-      desiredSprinklerOn = false;
-    } else if (sprinklerOn) {
-      const bool humRecovered = hum >= sprinklerOffHumPct;
-      const bool maxBurstElapsed = (nowMs - sprinklerOnStartMs) >= sprinklerMaxOnSec * 1000UL;
-      if (humRecovered || maxBurstElapsed) desiredSprinklerOn = false;
-    } else {
-      const bool humLow = hum <= sprinklerOnHumPct;
-      // If we've never turned on before (lastOffMs == 0) the cooldown is
-      // considered satisfied so first burst can fire immediately.
-      const bool cooldownOk =
-          sprinklerLastOffMs == 0 ||
-          (nowMs - sprinklerLastOffMs) >= sprinklerMinOffSec * 1000UL;
-      if (humLow && cooldownOk) desiredSprinklerOn = true;
-    }
-#if SPRINKLER_PIN >= 0
-    if (desiredSprinklerOn != sprinklerOn) setSprinklerRelay(desiredSprinklerOn);
-#else
-    if (sprinklerOn) sprinklerOn = false;
-#endif
-
-    // Heater — hysteresis + safety timers. Mirror of the sprinkler on the
-    // temperature side. Manual override wins; enabled==false forces off; a
-    // missing temperature reading forces off (avoid runaway heating).
-    bool desiredHeaterOn = heaterOn;
-    if (manualHeaterOverride) {
-      desiredHeaterOn = manualHeaterOn;
-    } else if (!heaterEnabled) {
-      desiredHeaterOn = false;
-    } else if (isnan(temp)) {
-      desiredHeaterOn = false;
-    } else if (heaterOn) {
-      const bool tempRecovered = temp >= heaterOffTempC;
-      const bool maxBurstElapsed = (nowMs - heaterOnStartMs) >= heaterMaxOnSec * 1000UL;
-      if (tempRecovered || maxBurstElapsed) desiredHeaterOn = false;
-    } else {
-      const bool tempLow = temp <= heaterOnTempC;
-      const bool cooldownOk =
-          heaterLastOffMs == 0 ||
-          (nowMs - heaterLastOffMs) >= heaterMinOffSec * 1000UL;
-      if (tempLow && cooldownOk) desiredHeaterOn = true;
-    }
-#if HEATER_PIN >= 0
-    if (desiredHeaterOn != heaterOn) setHeaterRelay(desiredHeaterOn);
-#else
-    if (heaterOn) heaterOn = false;
-#endif
+    lastHumPct = dht.readHumidity();
+    lastTempC = dht.readTemperature();
+    scd41ReadCo2ppm(lastCo2ppm);
+    applyActuators(lastTempC, lastHumPct, lastCo2ppm);
 
     if (WiFi.status() == WL_CONNECTED) {
-      postTelemetryToServer(temp, hum, co2ppm);
+      postTelemetryToServer(lastTempC, lastHumPct, lastCo2ppm);
     }
   }
 

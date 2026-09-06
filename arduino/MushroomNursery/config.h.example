@@ -29,7 +29,7 @@
 #define SPRINKLER_RELAY_ACTIVE_HIGH 1
 
 /* Heater relay (ceramic bulb / heating pad / space heater). -1 disables. */
-#define HEATER_PIN -1
+#define HEATER_PIN 27
 #define HEATER_RELAY_ACTIVE_HIGH 1
 
 /* At boot: hold this pin to GND (jumper) for WIFI_RESET_HOLD_MS to erase saved Wi‑Fi and force WiFiManager setup. Set to -1 to disable. */

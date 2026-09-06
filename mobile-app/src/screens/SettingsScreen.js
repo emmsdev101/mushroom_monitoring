@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { apiPut, devicePath, useApiValue } from '../lib/api';
 import { DEFAULT_SERVER_BASE_URL, useServerConfig } from '../lib/config';
+import { FEATURES } from '../lib/features';
 import { palette } from '../theme/palette';
 
 import { changeLocalCreds, getLocalCreds } from '../lib/localAuth';
@@ -90,8 +91,18 @@ export default function SettingsScreen({ deviceIdState, onSignOut }) {
       .catch(() => {});
   }, []);
 
+  // Hydrate the form once per device. Later polls must not overwrite switches
+  // the user just flipped (that made override appear to "turn itself off").
+  const hydratedFor = useRef(null);
   useEffect(() => {
-    const v = control.value || {};
+    hydratedFor.current = null;
+  }, [deviceId]);
+
+  useEffect(() => {
+    const v = control.value;
+    if (!v || typeof v !== 'object') return;
+    if (!deviceId || hydratedFor.current === deviceId) return;
+    hydratedFor.current = deviceId;
     if (typeof v.co2ThresholdPpm === 'number') setCo2Threshold(String(v.co2ThresholdPpm));
     else setCo2Threshold('');
     if (typeof v.tempFanOnC === 'number') setTempFanOnC(String(v.tempFanOnC));
@@ -128,7 +139,7 @@ export default function SettingsScreen({ deviceIdState, onSignOut }) {
     setHeaterMinOffSec(typeof v.heaterMinOffSec === 'number' ? String(v.heaterMinOffSec) : '');
     setManualHeaterOverride(typeof v.manualHeaterOverride === 'boolean' ? v.manualHeaterOverride : false);
     setManualHeaterOn(typeof v.manualHeaterOn === 'boolean' ? v.manualHeaterOn : false);
-  }, [control.value]);
+  }, [control.value, deviceId]);
 
   // Thesis target ranges — used as defaults when a field is left blank.
   const DEFAULTS = {
@@ -201,24 +212,26 @@ export default function SettingsScreen({ deviceIdState, onSignOut }) {
       return { ok: false, message: 'Sprinkler cooldown must be 30–3600 s (blank uses 300).' };
     }
 
-    const heatOn = heaterOnTempC.trim() === '' ? DEFAULTS.heaterOn : Number(heaterOnTempC);
-    if (!Number.isFinite(heatOn) || heatOn < 5 || heatOn > 28) {
-      return { ok: false, message: 'Heater ON threshold must be 5–28 °C (blank uses 21).' };
-    }
-    const heatOff = heaterOffTempC.trim() === '' ? DEFAULTS.heaterOff : Number(heaterOffTempC);
-    if (!Number.isFinite(heatOff) || heatOff < 6 || heatOff > 30) {
-      return { ok: false, message: 'Heater OFF threshold must be 6–30 °C (blank uses 23).' };
-    }
-    if (heatOn >= heatOff) {
-      return { ok: false, message: 'Heater ON threshold must be lower than OFF threshold (hysteresis).' };
-    }
-    const heatMax = heaterMaxOnSec.trim() === '' ? DEFAULTS.heaterMaxOn : Number(heaterMaxOnSec);
-    if (!Number.isFinite(heatMax) || heatMax < 30 || heatMax > 3600) {
-      return { ok: false, message: 'Heater max burst must be 30–3600 s (blank uses 900).' };
-    }
-    const heatMin = heaterMinOffSec.trim() === '' ? DEFAULTS.heaterMinOff : Number(heaterMinOffSec);
-    if (!Number.isFinite(heatMin) || heatMin < 15 || heatMin > 1800) {
-      return { ok: false, message: 'Heater cooldown must be 15–1800 s (blank uses 60).' };
+    if (FEATURES.heater) {
+      const heatOn = heaterOnTempC.trim() === '' ? DEFAULTS.heaterOn : Number(heaterOnTempC);
+      if (!Number.isFinite(heatOn) || heatOn < 5 || heatOn > 28) {
+        return { ok: false, message: 'Heater ON threshold must be 5–28 °C (blank uses 21).' };
+      }
+      const heatOff = heaterOffTempC.trim() === '' ? DEFAULTS.heaterOff : Number(heaterOffTempC);
+      if (!Number.isFinite(heatOff) || heatOff < 6 || heatOff > 30) {
+        return { ok: false, message: 'Heater OFF threshold must be 6–30 °C (blank uses 23).' };
+      }
+      if (heatOn >= heatOff) {
+        return { ok: false, message: 'Heater ON threshold must be lower than OFF threshold (hysteresis).' };
+      }
+      const heatMax = heaterMaxOnSec.trim() === '' ? DEFAULTS.heaterMaxOn : Number(heaterMaxOnSec);
+      if (!Number.isFinite(heatMax) || heatMax < 30 || heatMax > 3600) {
+        return { ok: false, message: 'Heater max burst must be 30–3600 s (blank uses 900).' };
+      }
+      const heatMin = heaterMinOffSec.trim() === '' ? DEFAULTS.heaterMinOff : Number(heaterMinOffSec);
+      if (!Number.isFinite(heatMin) || heatMin < 15 || heatMin > 1800) {
+        return { ok: false, message: 'Heater cooldown must be 15–1800 s (blank uses 60).' };
+      }
     }
 
     return { ok: true, message: '' };
@@ -287,20 +300,27 @@ export default function SettingsScreen({ deviceIdState, onSignOut }) {
         manualSprinklerOverride,
         manualSprinklerOn,
 
-        heaterEnabled,
+        heaterEnabled: FEATURES.heater ? heaterEnabled : false,
         heaterOnTempC: heatOn,
         heaterOffTempC: heatOff,
         heaterMaxOnSec: heatMax,
         heaterMinOffSec: heatMin,
-        manualHeaterOverride,
-        manualHeaterOn,
+        manualHeaterOverride: FEATURES.heater ? manualHeaterOverride : false,
+        manualHeaterOn: FEATURES.heater ? manualHeaterOn : false,
       });
-      // Refresh so the UI reflects the server's normalized values.
-      control.refresh?.();
     } catch (e) {
       Alert.alert('Save failed', String(e?.message || e));
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function persistSwitches(patch) {
+    if (!deviceId) return;
+    try {
+      await apiPut(devicePath(deviceId, 'control'), patch);
+    } catch (e) {
+      Alert.alert('Override failed', String(e?.message || e));
     }
   }
 
@@ -363,9 +383,8 @@ export default function SettingsScreen({ deviceIdState, onSignOut }) {
         <Text style={[styles.section, { color: text }]}>Target ranges</Text>
         <Text style={[styles.sectionSub, { color: sub }]}>
           Thesis targets: 21–27 °C, 80–90 % RH, 1000–2000 ppm CO₂. Readings outside the range trigger an alert. The
-          exhaust fan turns on when a reading exceeds the max (unless manual override is on). While temperature is
-          below its min, the sprinkler is inhibited and the exhaust ignores its humidity trigger so they don't fight
-          the heater — CO₂ safety still wins.
+          exhaust fan turns on when a reading exceeds the max (unless manual override is on). CO₂ safety still wins
+          over humidity venting when it is unusually cool.
         </Text>
 
         <View style={[styles.card, { backgroundColor: surface, borderColor: border }]}>
@@ -456,13 +475,23 @@ export default function SettingsScreen({ deviceIdState, onSignOut }) {
         </View>
 
         <Text style={[styles.section, { color: text, marginTop: 4 }]}>Exhaust fan</Text>
+        <Text style={[styles.sectionSub, { color: sub }]}>
+          Switches save immediately. Thresholds still need the Save button.
+        </Text>
         <View style={[styles.card, { backgroundColor: surface, borderColor: border }]}>
           <View style={styles.row}>
             <View style={{ flex: 1 }}>
               <Text style={[styles.label, { color: sub }]}>Manual Override</Text>
               <Text style={[styles.help, { color: sub }]}>Force exhaust fan state regardless of sensor readings.</Text>
             </View>
-            <Switch value={manualOverride} onValueChange={setManualOverride} thumbColor={palette.forestGreen} />
+            <Switch
+              value={manualOverride}
+              onValueChange={(v) => {
+                setManualOverride(v);
+                persistSwitches({ manualOverride: v, manualFanOn });
+              }}
+              thumbColor={palette.forestGreen}
+            />
           </View>
 
           <View style={[styles.row, { marginTop: 10, opacity: manualOverride ? 1 : 0.5 }]}>
@@ -472,7 +501,10 @@ export default function SettingsScreen({ deviceIdState, onSignOut }) {
             </View>
             <Switch
               value={manualFanOn}
-              onValueChange={setManualFanOn}
+              onValueChange={(v) => {
+                setManualFanOn(v);
+                persistSwitches({ manualOverride: true, manualFanOn: v });
+              }}
               disabled={!manualOverride}
               thumbColor={palette.forestGreen}
             />
@@ -489,7 +521,14 @@ export default function SettingsScreen({ deviceIdState, onSignOut }) {
               <Text style={[styles.label, { color: sub }]}>Enabled</Text>
               <Text style={[styles.help, { color: sub }]}>Turn off entirely to disable automatic intake operation.</Text>
             </View>
-            <Switch value={intakeFanEnabled} onValueChange={setIntakeFanEnabled} thumbColor={palette.forestGreen} />
+            <Switch
+              value={intakeFanEnabled}
+              onValueChange={(v) => {
+                setIntakeFanEnabled(v);
+                persistSwitches({ intakeFanEnabled: v });
+              }}
+              thumbColor={palette.forestGreen}
+            />
           </View>
 
           <View style={[styles.row, { marginTop: 10 }]}>
@@ -497,7 +536,14 @@ export default function SettingsScreen({ deviceIdState, onSignOut }) {
               <Text style={[styles.label, { color: sub }]}>Manual Override</Text>
               <Text style={[styles.help, { color: sub }]}>Force intake state regardless of sensor readings.</Text>
             </View>
-            <Switch value={manualIntakeFanOverride} onValueChange={setManualIntakeFanOverride} thumbColor={palette.forestGreen} />
+            <Switch
+              value={manualIntakeFanOverride}
+              onValueChange={(v) => {
+                setManualIntakeFanOverride(v);
+                persistSwitches({ manualIntakeFanOverride: v, manualIntakeFanOn });
+              }}
+              thumbColor={palette.forestGreen}
+            />
           </View>
 
           <View style={[styles.row, { marginTop: 10, opacity: manualIntakeFanOverride ? 1 : 0.5 }]}>
@@ -507,7 +553,10 @@ export default function SettingsScreen({ deviceIdState, onSignOut }) {
             </View>
             <Switch
               value={manualIntakeFanOn}
-              onValueChange={setManualIntakeFanOn}
+              onValueChange={(v) => {
+                setManualIntakeFanOn(v);
+                persistSwitches({ manualIntakeFanOverride: true, manualIntakeFanOn: v });
+              }}
               disabled={!manualIntakeFanOverride}
               thumbColor={palette.forestGreen}
             />
@@ -526,7 +575,14 @@ export default function SettingsScreen({ deviceIdState, onSignOut }) {
               <Text style={[styles.label, { color: sub }]}>Enabled</Text>
               <Text style={[styles.help, { color: sub }]}>Turn off entirely to disable automatic misting.</Text>
             </View>
-            <Switch value={sprinklerEnabled} onValueChange={setSprinklerEnabled} thumbColor={palette.forestGreen} />
+            <Switch
+              value={sprinklerEnabled}
+              onValueChange={(v) => {
+                setSprinklerEnabled(v);
+                persistSwitches({ sprinklerEnabled: v });
+              }}
+              thumbColor={palette.forestGreen}
+            />
           </View>
 
           <View style={[styles.row, { marginTop: 10 }]}>
@@ -586,7 +642,14 @@ export default function SettingsScreen({ deviceIdState, onSignOut }) {
               <Text style={[styles.label, { color: sub }]}>Manual Override</Text>
               <Text style={[styles.help, { color: sub }]}>Force sprinkler state regardless of humidity.</Text>
             </View>
-            <Switch value={manualSprinklerOverride} onValueChange={setManualSprinklerOverride} thumbColor={palette.forestGreen} />
+            <Switch
+              value={manualSprinklerOverride}
+              onValueChange={(v) => {
+                setManualSprinklerOverride(v);
+                persistSwitches({ manualSprinklerOverride: v, manualSprinklerOn });
+              }}
+              thumbColor={palette.forestGreen}
+            />
           </View>
 
           <View style={[styles.row, { marginTop: 10, opacity: manualSprinklerOverride ? 1 : 0.5 }]}>
@@ -596,13 +659,18 @@ export default function SettingsScreen({ deviceIdState, onSignOut }) {
             </View>
             <Switch
               value={manualSprinklerOn}
-              onValueChange={setManualSprinklerOn}
+              onValueChange={(v) => {
+                setManualSprinklerOn(v);
+                persistSwitches({ manualSprinklerOverride: true, manualSprinklerOn: v });
+              }}
               disabled={!manualSprinklerOverride}
               thumbColor={palette.forestGreen}
             />
           </View>
         </View>
 
+        {FEATURES.heater ? (
+        <>
         <Text style={[styles.section, { color: text, marginTop: 4 }]}>Heater</Text>
         <Text style={[styles.sectionSub, { color: sub }]}>
           Hysteresis-based heating to keep temperature in the target range. ON when temperature drops to the ON
@@ -615,7 +683,14 @@ export default function SettingsScreen({ deviceIdState, onSignOut }) {
               <Text style={[styles.label, { color: sub }]}>Enabled</Text>
               <Text style={[styles.help, { color: sub }]}>Turn off entirely to disable automatic heating.</Text>
             </View>
-            <Switch value={heaterEnabled} onValueChange={setHeaterEnabled} thumbColor={palette.forestGreen} />
+            <Switch
+              value={heaterEnabled}
+              onValueChange={(v) => {
+                setHeaterEnabled(v);
+                persistSwitches({ heaterEnabled: v });
+              }}
+              thumbColor={palette.forestGreen}
+            />
           </View>
 
           <View style={[styles.row, { marginTop: 10 }]}>
@@ -675,7 +750,14 @@ export default function SettingsScreen({ deviceIdState, onSignOut }) {
               <Text style={[styles.label, { color: sub }]}>Manual Override</Text>
               <Text style={[styles.help, { color: sub }]}>Force heater state regardless of temperature.</Text>
             </View>
-            <Switch value={manualHeaterOverride} onValueChange={setManualHeaterOverride} thumbColor={palette.forestGreen} />
+            <Switch
+              value={manualHeaterOverride}
+              onValueChange={(v) => {
+                setManualHeaterOverride(v);
+                persistSwitches({ manualHeaterOverride: v, manualHeaterOn });
+              }}
+              thumbColor={palette.forestGreen}
+            />
           </View>
 
           <View style={[styles.row, { marginTop: 10, opacity: manualHeaterOverride ? 1 : 0.5 }]}>
@@ -685,12 +767,17 @@ export default function SettingsScreen({ deviceIdState, onSignOut }) {
             </View>
             <Switch
               value={manualHeaterOn}
-              onValueChange={setManualHeaterOn}
+              onValueChange={(v) => {
+                setManualHeaterOn(v);
+                persistSwitches({ manualHeaterOverride: true, manualHeaterOn: v });
+              }}
               disabled={!manualHeaterOverride}
               thumbColor={palette.forestGreen}
             />
           </View>
         </View>
+        </>
+        ) : null}
 
         <View style={styles.footerRow}>
           <Text style={{ color: sub, fontSize: 12 }}>

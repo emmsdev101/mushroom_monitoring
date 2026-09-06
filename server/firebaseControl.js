@@ -203,9 +203,10 @@ function ensureControlSubscription(deviceId, onUpdate) {
       onValue(
         r,
         (snap) => {
-          const base = defaultControl();
-          applyControlSnapshot(base, snap.exists() ? snap.val() : null);
-          onUpdate(deviceId, base);
+          if (!snap.exists()) return;
+          const raw = snap.val();
+          if (!raw || typeof raw !== 'object') return;
+          onUpdate(deviceId, raw);
         },
         (err) => {
           if (isPermissionDenied(err)) disableRtdb('permission_denied');

@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View, useColorScheme } from 'react-native';
 import MetricCard from '../components/MetricCard';
+import OverridePanel from '../components/OverridePanel';
 import StatusCard from '../components/StatusCard';
 import { devicePath, useApiValue } from '../lib/api';
 import { palette } from '../theme/palette';
@@ -158,6 +159,19 @@ export default function DashboardScreen({ deviceId }) {
         intakeFanOn={derived.intakeFanOn}
         sprinklerOn={derived.sprinklerOn}
         heaterOn={derived.heaterOn}
+        control={control.value}
+      />
+
+      <OverridePanel
+        deviceId={deviceId}
+        control={control.value}
+        live={{
+          fanOn: derived.fanOn,
+          intakeFanOn: derived.intakeFanOn,
+          sprinklerOn: derived.sprinklerOn,
+          heaterOn: derived.heaterOn,
+        }}
+        onSaved={control.refresh}
       />
 
       <View style={styles.grid}>

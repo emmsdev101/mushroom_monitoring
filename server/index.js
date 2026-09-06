@@ -224,9 +224,11 @@ function getOrCreate(deviceId) {
         console.warn(`[history] backfill failed device=${deviceId}:`, e.message);
       });
   }
-  fb.ensureControlSubscription(deviceId, (id, control) => {
+  fb.ensureControlSubscription(deviceId, (id, incoming) => {
     const d = devices.get(id);
-    if (d) d.control = { ...control };
+    // Merge only fields present in RTDB — never replace the whole object
+    // with defaults (that wiped in-memory overrides when the node was empty).
+    if (d && incoming) fb.applyControlSnapshot(d.control, incoming);
   });
   return devices.get(deviceId);
 }
@@ -409,25 +411,12 @@ app.put('/api/devices/:deviceId/control', auth, async (req, res) => {
   const d = getOrCreate(deviceId);
   const b = req.body || {};
 
+  // Memory is authoritative for the ESP32 + app. Firebase is a best-effort mirror.
+  fb.applyControlSnapshot(d.control, b);
   try {
     await fb.mergeControlToFirebase(deviceId, b);
-    fb.applyControlSnapshot(d.control, b);
   } catch (e) {
     console.warn('[firebase] PUT not written to RTDB (using memory):', e.message);
-    if (typeof b.co2ThresholdPpm === 'number') {
-      const v = Math.round(b.co2ThresholdPpm);
-      if (v >= 400 && v <= 10000) d.control.co2ThresholdPpm = v;
-    }
-    if (typeof b.tempFanOnC === 'number') {
-      const v = b.tempFanOnC;
-      if (v >= 15 && v <= 45) d.control.tempFanOnC = v;
-    }
-    if (typeof b.humFanOnPct === 'number') {
-      const v = b.humFanOnPct;
-      if (v >= 55 && v <= 100) d.control.humFanOnPct = v;
-    }
-    if (typeof b.manualOverride === 'boolean') d.control.manualOverride = b.manualOverride;
-    if (typeof b.manualFanOn === 'boolean') d.control.manualFanOn = b.manualFanOn;
   }
   res.json(d.control);
 });

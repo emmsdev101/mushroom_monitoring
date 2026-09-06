@@ -19,13 +19,44 @@
 #define RELAY_PIN 23
 #define RELAY_ACTIVE_HIGH 1
 
+/* Intake fan relay (independent from the exhaust). Set to -1 to disable
+   entirely; firmware skips pin setup and reports intakeFanOn=false. */
+#define INTAKE_FAN_PIN -1
+#define INTAKE_RELAY_ACTIVE_HIGH 1
+
+/* Sprinkler / mister relay. Same rules as above. */
+#define SPRINKLER_PIN -1
+#define SPRINKLER_RELAY_ACTIVE_HIGH 1
+
+/* Heater relay (ceramic bulb / heating pad / space heater). -1 disables. */
+#define HEATER_PIN -1
+#define HEATER_RELAY_ACTIVE_HIGH 1
+
 /* At boot: hold this pin to GND (jumper) for WIFI_RESET_HOLD_MS to erase saved Wi‑Fi and force WiFiManager setup. Set to -1 to disable. */
 #define WIFI_RESET_PIN 18
 #define WIFI_RESET_HOLD_MS 600
 
-#define DEFAULT_CO2_THRESHOLD_PPM 800
+/* Target growing conditions (per thesis):
+     Temp    21-27 C
+     Humidity 80-90 %
+     CO2    1000-2000 ppm
+   Fan can only exhaust (cool / dehumidify / vent CO2), so the firmware only
+   tracks the upper bounds below. Lower-bound alerts are handled server-side. */
+#define DEFAULT_CO2_THRESHOLD_PPM 2000
 
-/* Volvariella volvacea (straw / paddy mushroom): fruiting ~28-32 C, RH ~85-92%.
-   Fan ventilates when readings rise above these upper limits (stale air / excess heat / moisture). */
-#define DEFAULT_TEMP_FAN_ON_C 32.0f
-#define DEFAULT_HUM_FAN_ON_PCT 92.0f
+#define DEFAULT_TEMP_FAN_ON_C 27.0f
+#define DEFAULT_HUM_FAN_ON_PCT 90.0f
+
+/* Sprinkler/mister — hysteresis + safety timers. Server-side defaults win
+   once control is fetched; these are only used before the first fetch. */
+#define DEFAULT_SPRINKLER_ON_HUM_PCT  78.0f
+#define DEFAULT_SPRINKLER_OFF_HUM_PCT 85.0f
+#define DEFAULT_SPRINKLER_MAX_ON_SEC  60
+#define DEFAULT_SPRINKLER_MIN_OFF_SEC 300
+
+/* Heater — hysteresis + safety timers. Wider max-on because room temperature
+   responds slowly. Server-side defaults win once control is fetched. */
+#define DEFAULT_HEATER_ON_TEMP_C  21.0f
+#define DEFAULT_HEATER_OFF_TEMP_C 23.0f
+#define DEFAULT_HEATER_MAX_ON_SEC 900
+#define DEFAULT_HEATER_MIN_OFF_SEC 60

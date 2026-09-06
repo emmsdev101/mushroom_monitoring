@@ -30,11 +30,37 @@ export default function SettingsScreen({ deviceIdState, onSignOut }) {
   const control = useRtdbValue(devicePath(deviceId, 'control'));
 
   const [pendingDeviceId, setPendingDeviceId] = useState(deviceId);
+  // Upper bounds (fan-on above)
   const [co2Threshold, setCo2Threshold] = useState('');
   const [tempFanOnC, setTempFanOnC] = useState('');
   const [humFanOnPct, setHumFanOnPct] = useState('');
+  // Lower bounds (alert-only)
+  const [co2MinPpm, setCo2MinPpm] = useState('');
+  const [tempMinC, setTempMinC] = useState('');
+  const [humMinPct, setHumMinPct] = useState('');
+  // Exhaust fan manual override
   const [manualOverride, setManualOverride] = useState(false);
   const [manualFanOn, setManualFanOn] = useState(false);
+  // Intake fan
+  const [intakeFanEnabled, setIntakeFanEnabled] = useState(true);
+  const [manualIntakeFanOverride, setManualIntakeFanOverride] = useState(false);
+  const [manualIntakeFanOn, setManualIntakeFanOn] = useState(false);
+  // Sprinkler
+  const [sprinklerEnabled, setSprinklerEnabled] = useState(true);
+  const [sprinklerOnHumPct, setSprinklerOnHumPct] = useState('');
+  const [sprinklerOffHumPct, setSprinklerOffHumPct] = useState('');
+  const [sprinklerMaxOnSec, setSprinklerMaxOnSec] = useState('');
+  const [sprinklerMinOffSec, setSprinklerMinOffSec] = useState('');
+  const [manualSprinklerOverride, setManualSprinklerOverride] = useState(false);
+  const [manualSprinklerOn, setManualSprinklerOn] = useState(false);
+  // Heater
+  const [heaterEnabled, setHeaterEnabled] = useState(true);
+  const [heaterOnTempC, setHeaterOnTempC] = useState('');
+  const [heaterOffTempC, setHeaterOffTempC] = useState('');
+  const [heaterMaxOnSec, setHeaterMaxOnSec] = useState('');
+  const [heaterMinOffSec, setHeaterMinOffSec] = useState('');
+  const [manualHeaterOverride, setManualHeaterOverride] = useState(false);
+  const [manualHeaterOn, setManualHeaterOn] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const [adminUser, setAdminUser] = useState('');
@@ -58,29 +84,127 @@ export default function SettingsScreen({ deviceIdState, onSignOut }) {
     else setTempFanOnC('');
     if (typeof v.humFanOnPct === 'number') setHumFanOnPct(String(v.humFanOnPct));
     else setHumFanOnPct('');
+    if (typeof v.co2MinPpm === 'number') setCo2MinPpm(String(v.co2MinPpm));
+    else setCo2MinPpm('');
+    if (typeof v.tempMinC === 'number') setTempMinC(String(v.tempMinC));
+    else setTempMinC('');
+    if (typeof v.humMinPct === 'number') setHumMinPct(String(v.humMinPct));
+    else setHumMinPct('');
     if (typeof v.manualOverride === 'boolean') setManualOverride(v.manualOverride);
     else setManualOverride(false);
     if (typeof v.manualFanOn === 'boolean') setManualFanOn(v.manualFanOn);
     else setManualFanOn(false);
+
+    setIntakeFanEnabled(typeof v.intakeFanEnabled === 'boolean' ? v.intakeFanEnabled : true);
+    setManualIntakeFanOverride(typeof v.manualIntakeFanOverride === 'boolean' ? v.manualIntakeFanOverride : false);
+    setManualIntakeFanOn(typeof v.manualIntakeFanOn === 'boolean' ? v.manualIntakeFanOn : false);
+
+    setSprinklerEnabled(typeof v.sprinklerEnabled === 'boolean' ? v.sprinklerEnabled : true);
+    setSprinklerOnHumPct(typeof v.sprinklerOnHumPct === 'number' ? String(v.sprinklerOnHumPct) : '');
+    setSprinklerOffHumPct(typeof v.sprinklerOffHumPct === 'number' ? String(v.sprinklerOffHumPct) : '');
+    setSprinklerMaxOnSec(typeof v.sprinklerMaxOnSec === 'number' ? String(v.sprinklerMaxOnSec) : '');
+    setSprinklerMinOffSec(typeof v.sprinklerMinOffSec === 'number' ? String(v.sprinklerMinOffSec) : '');
+    setManualSprinklerOverride(typeof v.manualSprinklerOverride === 'boolean' ? v.manualSprinklerOverride : false);
+    setManualSprinklerOn(typeof v.manualSprinklerOn === 'boolean' ? v.manualSprinklerOn : false);
+
+    setHeaterEnabled(typeof v.heaterEnabled === 'boolean' ? v.heaterEnabled : true);
+    setHeaterOnTempC(typeof v.heaterOnTempC === 'number' ? String(v.heaterOnTempC) : '');
+    setHeaterOffTempC(typeof v.heaterOffTempC === 'number' ? String(v.heaterOffTempC) : '');
+    setHeaterMaxOnSec(typeof v.heaterMaxOnSec === 'number' ? String(v.heaterMaxOnSec) : '');
+    setHeaterMinOffSec(typeof v.heaterMinOffSec === 'number' ? String(v.heaterMinOffSec) : '');
+    setManualHeaterOverride(typeof v.manualHeaterOverride === 'boolean' ? v.manualHeaterOverride : false);
+    setManualHeaterOn(typeof v.manualHeaterOn === 'boolean' ? v.manualHeaterOn : false);
   }, [control.value]);
+
+  // Thesis target ranges — used as defaults when a field is left blank.
+  const DEFAULTS = {
+    co2Max: 2000, co2Min: 1000,
+    tempMax: 27, tempMin: 21,
+    humMax: 90, humMin: 80,
+    sprinklerOn: 78, sprinklerOff: 85,
+    sprinklerMaxOn: 60, sprinklerMinOff: 300,
+    heaterOn: 21, heaterOff: 23,
+    heaterMaxOn: 900, heaterMinOff: 60,
+  };
 
   function validate() {
     const nextDeviceId = pendingDeviceId.trim();
     if (!nextDeviceId) return { ok: false, message: 'Device ID is required.' };
 
-    const thr = co2Threshold.trim() === '' ? 800 : Number(co2Threshold);
+    const thr = co2Threshold.trim() === '' ? DEFAULTS.co2Max : Number(co2Threshold);
     if (!Number.isFinite(thr) || thr < 400 || thr > 10000) {
-      return { ok: false, message: 'CO₂ threshold must be 400–10000 ppm (leave blank for default 800).' };
+      return { ok: false, message: 'CO₂ max must be 400–10000 ppm (leave blank for default 2000).' };
+    }
+    const co2Lo = co2MinPpm.trim() === '' ? DEFAULTS.co2Min : Number(co2MinPpm);
+    if (!Number.isFinite(co2Lo) || co2Lo < 300 || co2Lo > 5000) {
+      return { ok: false, message: 'CO₂ min must be 300–5000 ppm (leave blank for default 1000).' };
+    }
+    if (co2Lo >= thr) {
+      return { ok: false, message: 'CO₂ min must be less than CO₂ max.' };
     }
 
-    const t = tempFanOnC.trim() === '' ? 32 : Number(tempFanOnC);
+    const t = tempFanOnC.trim() === '' ? DEFAULTS.tempMax : Number(tempFanOnC);
     if (!Number.isFinite(t) || t < 15 || t > 45) {
-      return { ok: false, message: 'Temp fan-on must be 15–45 °C (leave blank for default 32).' };
+      return { ok: false, message: 'Temp max must be 15–45 °C (leave blank for default 27).' };
+    }
+    const tLo = tempMinC.trim() === '' ? DEFAULTS.tempMin : Number(tempMinC);
+    if (!Number.isFinite(tLo) || tLo < 5 || tLo > 30) {
+      return { ok: false, message: 'Temp min must be 5–30 °C (leave blank for default 21).' };
+    }
+    if (tLo >= t) {
+      return { ok: false, message: 'Temp min must be less than temp max.' };
     }
 
-    const h = humFanOnPct.trim() === '' ? 92 : Number(humFanOnPct);
+    const h = humFanOnPct.trim() === '' ? DEFAULTS.humMax : Number(humFanOnPct);
     if (!Number.isFinite(h) || h < 55 || h > 100) {
-      return { ok: false, message: 'Humidity fan-on must be 55–100% (leave blank for default 92).' };
+      return { ok: false, message: 'Humidity max must be 55–100% (leave blank for default 90).' };
+    }
+    const hLo = humMinPct.trim() === '' ? DEFAULTS.humMin : Number(humMinPct);
+    if (!Number.isFinite(hLo) || hLo < 30 || hLo > 95) {
+      return { ok: false, message: 'Humidity min must be 30–95% (leave blank for default 80).' };
+    }
+    if (hLo >= h) {
+      return { ok: false, message: 'Humidity min must be less than humidity max.' };
+    }
+
+    const sOn = sprinklerOnHumPct.trim() === '' ? DEFAULTS.sprinklerOn : Number(sprinklerOnHumPct);
+    if (!Number.isFinite(sOn) || sOn < 30 || sOn > 95) {
+      return { ok: false, message: 'Sprinkler ON threshold must be 30–95% (blank uses 78).' };
+    }
+    const sOff = sprinklerOffHumPct.trim() === '' ? DEFAULTS.sprinklerOff : Number(sprinklerOffHumPct);
+    if (!Number.isFinite(sOff) || sOff < 35 || sOff > 100) {
+      return { ok: false, message: 'Sprinkler OFF threshold must be 35–100% (blank uses 85).' };
+    }
+    if (sOn >= sOff) {
+      return { ok: false, message: 'Sprinkler ON threshold must be less than OFF threshold (hysteresis).' };
+    }
+    const sMax = sprinklerMaxOnSec.trim() === '' ? DEFAULTS.sprinklerMaxOn : Number(sprinklerMaxOnSec);
+    if (!Number.isFinite(sMax) || sMax < 5 || sMax > 600) {
+      return { ok: false, message: 'Sprinkler max burst must be 5–600 s (blank uses 60).' };
+    }
+    const sMin = sprinklerMinOffSec.trim() === '' ? DEFAULTS.sprinklerMinOff : Number(sprinklerMinOffSec);
+    if (!Number.isFinite(sMin) || sMin < 30 || sMin > 3600) {
+      return { ok: false, message: 'Sprinkler cooldown must be 30–3600 s (blank uses 300).' };
+    }
+
+    const heatOn = heaterOnTempC.trim() === '' ? DEFAULTS.heaterOn : Number(heaterOnTempC);
+    if (!Number.isFinite(heatOn) || heatOn < 5 || heatOn > 28) {
+      return { ok: false, message: 'Heater ON threshold must be 5–28 °C (blank uses 21).' };
+    }
+    const heatOff = heaterOffTempC.trim() === '' ? DEFAULTS.heaterOff : Number(heaterOffTempC);
+    if (!Number.isFinite(heatOff) || heatOff < 6 || heatOff > 30) {
+      return { ok: false, message: 'Heater OFF threshold must be 6–30 °C (blank uses 23).' };
+    }
+    if (heatOn >= heatOff) {
+      return { ok: false, message: 'Heater ON threshold must be lower than OFF threshold (hysteresis).' };
+    }
+    const heatMax = heaterMaxOnSec.trim() === '' ? DEFAULTS.heaterMaxOn : Number(heaterMaxOnSec);
+    if (!Number.isFinite(heatMax) || heatMax < 30 || heatMax > 3600) {
+      return { ok: false, message: 'Heater max burst must be 30–3600 s (blank uses 900).' };
+    }
+    const heatMin = heaterMinOffSec.trim() === '' ? DEFAULTS.heaterMinOff : Number(heaterMinOffSec);
+    if (!Number.isFinite(heatMin) || heatMin < 15 || heatMin > 1800) {
+      return { ok: false, message: 'Heater cooldown must be 15–1800 s (blank uses 60).' };
     }
 
     return { ok: true, message: '' };
@@ -88,7 +212,13 @@ export default function SettingsScreen({ deviceIdState, onSignOut }) {
 
   const canSave = useMemo(() => {
     return validate().ok;
-  }, [pendingDeviceId, co2Threshold, tempFanOnC, humFanOnPct]);
+  }, [
+    pendingDeviceId,
+    co2Threshold, tempFanOnC, humFanOnPct,
+    co2MinPpm, tempMinC, humMinPct,
+    sprinklerOnHumPct, sprinklerOffHumPct, sprinklerMaxOnSec, sprinklerMinOffSec,
+    heaterOnTempC, heaterOffTempC, heaterMaxOnSec, heaterMinOffSec,
+  ]);
 
   async function save() {
     const v = validate();
@@ -99,19 +229,55 @@ export default function SettingsScreen({ deviceIdState, onSignOut }) {
     setSaving(true);
     try {
       const nextDeviceId = pendingDeviceId.trim();
-      const thr = co2Threshold.trim() === '' ? 800 : Number(co2Threshold);
-      const tFan = tempFanOnC.trim() === '' ? 32 : Number(tempFanOnC);
-      const hFan = humFanOnPct.trim() === '' ? 92 : Number(humFanOnPct);
+      const thr = co2Threshold.trim() === '' ? DEFAULTS.co2Max : Number(co2Threshold);
+      const tFan = tempFanOnC.trim() === '' ? DEFAULTS.tempMax : Number(tempFanOnC);
+      const hFan = humFanOnPct.trim() === '' ? DEFAULTS.humMax : Number(humFanOnPct);
+      const co2Lo = co2MinPpm.trim() === '' ? DEFAULTS.co2Min : Number(co2MinPpm);
+      const tLo = tempMinC.trim() === '' ? DEFAULTS.tempMin : Number(tempMinC);
+      const hLo = humMinPct.trim() === '' ? DEFAULTS.humMin : Number(humMinPct);
 
       if (nextDeviceId !== deviceId) {
         await setDeviceId(nextDeviceId);
       }
 
+      const sOn = sprinklerOnHumPct.trim() === '' ? DEFAULTS.sprinklerOn : Number(sprinklerOnHumPct);
+      const sOff = sprinklerOffHumPct.trim() === '' ? DEFAULTS.sprinklerOff : Number(sprinklerOffHumPct);
+      const sMax = sprinklerMaxOnSec.trim() === '' ? DEFAULTS.sprinklerMaxOn : Number(sprinklerMaxOnSec);
+      const sMin = sprinklerMinOffSec.trim() === '' ? DEFAULTS.sprinklerMinOff : Number(sprinklerMinOffSec);
+
       await rtdbSet(devicePath(nextDeviceId, 'control/co2ThresholdPpm'), thr);
       await rtdbSet(devicePath(nextDeviceId, 'control/tempFanOnC'), tFan);
       await rtdbSet(devicePath(nextDeviceId, 'control/humFanOnPct'), hFan);
+      await rtdbSet(devicePath(nextDeviceId, 'control/co2MinPpm'), co2Lo);
+      await rtdbSet(devicePath(nextDeviceId, 'control/tempMinC'), tLo);
+      await rtdbSet(devicePath(nextDeviceId, 'control/humMinPct'), hLo);
       await rtdbSet(devicePath(nextDeviceId, 'control/manualOverride'), manualOverride);
       await rtdbSet(devicePath(nextDeviceId, 'control/manualFanOn'), manualFanOn);
+
+      await rtdbSet(devicePath(nextDeviceId, 'control/intakeFanEnabled'), intakeFanEnabled);
+      await rtdbSet(devicePath(nextDeviceId, 'control/manualIntakeFanOverride'), manualIntakeFanOverride);
+      await rtdbSet(devicePath(nextDeviceId, 'control/manualIntakeFanOn'), manualIntakeFanOn);
+
+      await rtdbSet(devicePath(nextDeviceId, 'control/sprinklerEnabled'), sprinklerEnabled);
+      await rtdbSet(devicePath(nextDeviceId, 'control/sprinklerOnHumPct'), sOn);
+      await rtdbSet(devicePath(nextDeviceId, 'control/sprinklerOffHumPct'), sOff);
+      await rtdbSet(devicePath(nextDeviceId, 'control/sprinklerMaxOnSec'), sMax);
+      await rtdbSet(devicePath(nextDeviceId, 'control/sprinklerMinOffSec'), sMin);
+      await rtdbSet(devicePath(nextDeviceId, 'control/manualSprinklerOverride'), manualSprinklerOverride);
+      await rtdbSet(devicePath(nextDeviceId, 'control/manualSprinklerOn'), manualSprinklerOn);
+
+      const heatOn = heaterOnTempC.trim() === '' ? DEFAULTS.heaterOn : Number(heaterOnTempC);
+      const heatOff = heaterOffTempC.trim() === '' ? DEFAULTS.heaterOff : Number(heaterOffTempC);
+      const heatMax = heaterMaxOnSec.trim() === '' ? DEFAULTS.heaterMaxOn : Number(heaterMaxOnSec);
+      const heatMin = heaterMinOffSec.trim() === '' ? DEFAULTS.heaterMinOff : Number(heaterMinOffSec);
+
+      await rtdbSet(devicePath(nextDeviceId, 'control/heaterEnabled'), heaterEnabled);
+      await rtdbSet(devicePath(nextDeviceId, 'control/heaterOnTempC'), heatOn);
+      await rtdbSet(devicePath(nextDeviceId, 'control/heaterOffTempC'), heatOff);
+      await rtdbSet(devicePath(nextDeviceId, 'control/heaterMaxOnSec'), heatMax);
+      await rtdbSet(devicePath(nextDeviceId, 'control/heaterMinOffSec'), heatMin);
+      await rtdbSet(devicePath(nextDeviceId, 'control/manualHeaterOverride'), manualHeaterOverride);
+      await rtdbSet(devicePath(nextDeviceId, 'control/manualHeaterOn'), manualHeaterOn);
     } catch (e) {
       Alert.alert('Save failed', String(e?.message || e));
     } finally {
@@ -153,75 +319,333 @@ export default function SettingsScreen({ deviceIdState, onSignOut }) {
           </Text>
         </View>
 
-        <Text style={[styles.section, { color: text }]}>Thresholds</Text>
+        <Text style={[styles.section, { color: text }]}>Target ranges</Text>
         <Text style={[styles.sectionSub, { color: sub }]}>
-          When readings cross these limits, the fan turns on (unless manual override is on). Same values as on the
-          Monitoring tab.
+          Thesis targets: 21–27 °C, 80–90 % RH, 1000–2000 ppm CO₂. Readings outside the range trigger an alert. The
+          exhaust fan turns on when a reading exceeds the max (unless manual override is on). While temperature is
+          below its min, the sprinkler is inhibited and the exhaust ignores its humidity trigger so they don't fight
+          the heater — CO₂ safety still wins.
         </Text>
 
         <View style={[styles.card, { backgroundColor: surface, borderColor: border }]}>
-          <Text style={[styles.label, { color: sub }]}>CO₂ Threshold (ppm)</Text>
-          <TextInput
-            value={co2Threshold}
-            onChangeText={setCo2Threshold}
-            keyboardType="numeric"
-            placeholder="800"
-            placeholderTextColor={isDark ? 'rgba(231,239,233,0.35)' : 'rgba(17,24,21,0.35)'}
-            style={[styles.input, { color: text, borderColor: border }]}
-          />
-          <Text style={[styles.help, { color: sub }]}>When CO₂ exceeds this, the exhaust fan turns on (unless overridden).</Text>
+          <Text style={[styles.label, { color: sub }]}>Temperature (°C)</Text>
+          <View style={styles.row}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.help, { color: sub }]}>Min</Text>
+              <TextInput
+                value={tempMinC}
+                onChangeText={setTempMinC}
+                keyboardType="decimal-pad"
+                placeholder="21"
+                placeholderTextColor={isDark ? 'rgba(231,239,233,0.35)' : 'rgba(17,24,21,0.35)'}
+                style={[styles.input, { color: text, borderColor: border }]}
+              />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.help, { color: sub }]}>Max (fan-on)</Text>
+              <TextInput
+                value={tempFanOnC}
+                onChangeText={setTempFanOnC}
+                keyboardType="decimal-pad"
+                placeholder="27"
+                placeholderTextColor={isDark ? 'rgba(231,239,233,0.35)' : 'rgba(17,24,21,0.35)'}
+                style={[styles.input, { color: text, borderColor: border }]}
+              />
+            </View>
+          </View>
+          <Text style={[styles.help, { color: sub }]}>Min 5–30 °C, max 15–45 °C. Blank uses 21 / 27.</Text>
         </View>
 
         <View style={[styles.card, { backgroundColor: surface, borderColor: border }]}>
-          <Text style={[styles.label, { color: sub }]}>Temp fan-on (°C)</Text>
-          <TextInput
-            value={tempFanOnC}
-            onChangeText={setTempFanOnC}
-            keyboardType="decimal-pad"
-            placeholder="32"
-            placeholderTextColor={isDark ? 'rgba(231,239,233,0.35)' : 'rgba(17,24,21,0.35)'}
-            style={[styles.input, { color: text, borderColor: border }]}
-          />
-          <Text style={[styles.help, { color: sub }]}>
-            Fan runs when temperature rises above this value (15–45 °C). Leave empty for 32.
-          </Text>
+          <Text style={[styles.label, { color: sub }]}>Humidity (%)</Text>
+          <View style={styles.row}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.help, { color: sub }]}>Min</Text>
+              <TextInput
+                value={humMinPct}
+                onChangeText={setHumMinPct}
+                keyboardType="decimal-pad"
+                placeholder="80"
+                placeholderTextColor={isDark ? 'rgba(231,239,233,0.35)' : 'rgba(17,24,21,0.35)'}
+                style={[styles.input, { color: text, borderColor: border }]}
+              />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.help, { color: sub }]}>Max (fan-on)</Text>
+              <TextInput
+                value={humFanOnPct}
+                onChangeText={setHumFanOnPct}
+                keyboardType="decimal-pad"
+                placeholder="90"
+                placeholderTextColor={isDark ? 'rgba(231,239,233,0.35)' : 'rgba(17,24,21,0.35)'}
+                style={[styles.input, { color: text, borderColor: border }]}
+              />
+            </View>
+          </View>
+          <Text style={[styles.help, { color: sub }]}>Min 30–95 %, max 55–100 %. Blank uses 80 / 90.</Text>
         </View>
 
         <View style={[styles.card, { backgroundColor: surface, borderColor: border }]}>
-          <Text style={[styles.label, { color: sub }]}>Humidity fan-on (%)</Text>
-          <TextInput
-            value={humFanOnPct}
-            onChangeText={setHumFanOnPct}
-            keyboardType="decimal-pad"
-            placeholder="92"
-            placeholderTextColor={isDark ? 'rgba(231,239,233,0.35)' : 'rgba(17,24,21,0.35)'}
-            style={[styles.input, { color: text, borderColor: border }]}
-          />
-          <Text style={[styles.help, { color: sub }]}>
-            Fan runs when humidity rises above this value (55–100 %). Leave empty for 92.
-          </Text>
+          <Text style={[styles.label, { color: sub }]}>CO₂ (ppm)</Text>
+          <View style={styles.row}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.help, { color: sub }]}>Min</Text>
+              <TextInput
+                value={co2MinPpm}
+                onChangeText={setCo2MinPpm}
+                keyboardType="numeric"
+                placeholder="1000"
+                placeholderTextColor={isDark ? 'rgba(231,239,233,0.35)' : 'rgba(17,24,21,0.35)'}
+                style={[styles.input, { color: text, borderColor: border }]}
+              />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.help, { color: sub }]}>Max (fan-on)</Text>
+              <TextInput
+                value={co2Threshold}
+                onChangeText={setCo2Threshold}
+                keyboardType="numeric"
+                placeholder="2000"
+                placeholderTextColor={isDark ? 'rgba(231,239,233,0.35)' : 'rgba(17,24,21,0.35)'}
+                style={[styles.input, { color: text, borderColor: border }]}
+              />
+            </View>
+          </View>
+          <Text style={[styles.help, { color: sub }]}>Min 300–5000 ppm, max 400–10000 ppm. Blank uses 1000 / 2000.</Text>
         </View>
 
-        <Text style={[styles.section, { color: text, marginTop: 4 }]}>Manual fan</Text>
-
+        <Text style={[styles.section, { color: text, marginTop: 4 }]}>Exhaust fan</Text>
         <View style={[styles.card, { backgroundColor: surface, borderColor: border }]}>
           <View style={styles.row}>
             <View style={{ flex: 1 }}>
               <Text style={[styles.label, { color: sub }]}>Manual Override</Text>
-              <Text style={[styles.help, { color: sub }]}>Force fan state regardless of sensor readings.</Text>
+              <Text style={[styles.help, { color: sub }]}>Force exhaust fan state regardless of sensor readings.</Text>
             </View>
             <Switch value={manualOverride} onValueChange={setManualOverride} thumbColor={palette.forestGreen} />
           </View>
 
           <View style={[styles.row, { marginTop: 10, opacity: manualOverride ? 1 : 0.5 }]}>
             <View style={{ flex: 1 }}>
-              <Text style={[styles.label, { color: sub }]}>Fan</Text>
+              <Text style={[styles.label, { color: sub }]}>Exhaust fan</Text>
               <Text style={[styles.help, { color: sub }]}>{manualFanOn ? 'ON' : 'OFF'}</Text>
             </View>
             <Switch
               value={manualFanOn}
               onValueChange={setManualFanOn}
               disabled={!manualOverride}
+              thumbColor={palette.forestGreen}
+            />
+          </View>
+        </View>
+
+        <Text style={[styles.section, { color: text, marginTop: 4 }]}>Intake fan</Text>
+        <Text style={[styles.sectionSub, { color: sub }]}>
+          Independent of the exhaust: turns on when CO₂ or temperature exceeds the max (to pull in fresh outside air).
+        </Text>
+        <View style={[styles.card, { backgroundColor: surface, borderColor: border }]}>
+          <View style={styles.row}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.label, { color: sub }]}>Enabled</Text>
+              <Text style={[styles.help, { color: sub }]}>Turn off entirely to disable automatic intake operation.</Text>
+            </View>
+            <Switch value={intakeFanEnabled} onValueChange={setIntakeFanEnabled} thumbColor={palette.forestGreen} />
+          </View>
+
+          <View style={[styles.row, { marginTop: 10 }]}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.label, { color: sub }]}>Manual Override</Text>
+              <Text style={[styles.help, { color: sub }]}>Force intake state regardless of sensor readings.</Text>
+            </View>
+            <Switch value={manualIntakeFanOverride} onValueChange={setManualIntakeFanOverride} thumbColor={palette.forestGreen} />
+          </View>
+
+          <View style={[styles.row, { marginTop: 10, opacity: manualIntakeFanOverride ? 1 : 0.5 }]}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.label, { color: sub }]}>Intake fan</Text>
+              <Text style={[styles.help, { color: sub }]}>{manualIntakeFanOn ? 'ON' : 'OFF'}</Text>
+            </View>
+            <Switch
+              value={manualIntakeFanOn}
+              onValueChange={setManualIntakeFanOn}
+              disabled={!manualIntakeFanOverride}
+              thumbColor={palette.forestGreen}
+            />
+          </View>
+        </View>
+
+        <Text style={[styles.section, { color: text, marginTop: 4 }]}>Sprinkler / humidifier</Text>
+        <Text style={[styles.sectionSub, { color: sub }]}>
+          Hysteresis-based misting to keep humidity in the target range. ON when humidity drops to the ON threshold;
+          OFF once it recovers to the OFF threshold or the max burst elapses. A cooldown between bursts prevents the
+          sensor from lagging behind reality.
+        </Text>
+        <View style={[styles.card, { backgroundColor: surface, borderColor: border }]}>
+          <View style={styles.row}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.label, { color: sub }]}>Enabled</Text>
+              <Text style={[styles.help, { color: sub }]}>Turn off entirely to disable automatic misting.</Text>
+            </View>
+            <Switch value={sprinklerEnabled} onValueChange={setSprinklerEnabled} thumbColor={palette.forestGreen} />
+          </View>
+
+          <View style={[styles.row, { marginTop: 10 }]}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.help, { color: sub }]}>ON threshold (%)</Text>
+              <TextInput
+                value={sprinklerOnHumPct}
+                onChangeText={setSprinklerOnHumPct}
+                keyboardType="decimal-pad"
+                placeholder="78"
+                placeholderTextColor={isDark ? 'rgba(231,239,233,0.35)' : 'rgba(17,24,21,0.35)'}
+                style={[styles.input, { color: text, borderColor: border }]}
+              />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.help, { color: sub }]}>OFF threshold (%)</Text>
+              <TextInput
+                value={sprinklerOffHumPct}
+                onChangeText={setSprinklerOffHumPct}
+                keyboardType="decimal-pad"
+                placeholder="85"
+                placeholderTextColor={isDark ? 'rgba(231,239,233,0.35)' : 'rgba(17,24,21,0.35)'}
+                style={[styles.input, { color: text, borderColor: border }]}
+              />
+            </View>
+          </View>
+          <Text style={[styles.help, { color: sub }]}>ON must be lower than OFF. Blank uses 78 / 85.</Text>
+
+          <View style={[styles.row, { marginTop: 10 }]}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.help, { color: sub }]}>Max burst (s)</Text>
+              <TextInput
+                value={sprinklerMaxOnSec}
+                onChangeText={setSprinklerMaxOnSec}
+                keyboardType="numeric"
+                placeholder="60"
+                placeholderTextColor={isDark ? 'rgba(231,239,233,0.35)' : 'rgba(17,24,21,0.35)'}
+                style={[styles.input, { color: text, borderColor: border }]}
+              />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.help, { color: sub }]}>Cooldown (s)</Text>
+              <TextInput
+                value={sprinklerMinOffSec}
+                onChangeText={setSprinklerMinOffSec}
+                keyboardType="numeric"
+                placeholder="300"
+                placeholderTextColor={isDark ? 'rgba(231,239,233,0.35)' : 'rgba(17,24,21,0.35)'}
+                style={[styles.input, { color: text, borderColor: border }]}
+              />
+            </View>
+          </View>
+          <Text style={[styles.help, { color: sub }]}>Max burst 5–600 s, cooldown 30–3600 s. Blank uses 60 / 300.</Text>
+
+          <View style={[styles.row, { marginTop: 10 }]}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.label, { color: sub }]}>Manual Override</Text>
+              <Text style={[styles.help, { color: sub }]}>Force sprinkler state regardless of humidity.</Text>
+            </View>
+            <Switch value={manualSprinklerOverride} onValueChange={setManualSprinklerOverride} thumbColor={palette.forestGreen} />
+          </View>
+
+          <View style={[styles.row, { marginTop: 10, opacity: manualSprinklerOverride ? 1 : 0.5 }]}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.label, { color: sub }]}>Sprinkler</Text>
+              <Text style={[styles.help, { color: sub }]}>{manualSprinklerOn ? 'ON' : 'OFF'}</Text>
+            </View>
+            <Switch
+              value={manualSprinklerOn}
+              onValueChange={setManualSprinklerOn}
+              disabled={!manualSprinklerOverride}
+              thumbColor={palette.forestGreen}
+            />
+          </View>
+        </View>
+
+        <Text style={[styles.section, { color: text, marginTop: 4 }]}>Heater</Text>
+        <Text style={[styles.sectionSub, { color: sub }]}>
+          Hysteresis-based heating to keep temperature in the target range. ON when temperature drops to the ON
+          threshold; OFF once it recovers to the OFF threshold or the max burst elapses. Cooldown between bursts
+          prevents short-cycling. Room temp responds slowly, so defaults are longer than the sprinkler's.
+        </Text>
+        <View style={[styles.card, { backgroundColor: surface, borderColor: border }]}>
+          <View style={styles.row}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.label, { color: sub }]}>Enabled</Text>
+              <Text style={[styles.help, { color: sub }]}>Turn off entirely to disable automatic heating.</Text>
+            </View>
+            <Switch value={heaterEnabled} onValueChange={setHeaterEnabled} thumbColor={palette.forestGreen} />
+          </View>
+
+          <View style={[styles.row, { marginTop: 10 }]}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.help, { color: sub }]}>ON threshold (°C)</Text>
+              <TextInput
+                value={heaterOnTempC}
+                onChangeText={setHeaterOnTempC}
+                keyboardType="decimal-pad"
+                placeholder="21"
+                placeholderTextColor={isDark ? 'rgba(231,239,233,0.35)' : 'rgba(17,24,21,0.35)'}
+                style={[styles.input, { color: text, borderColor: border }]}
+              />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.help, { color: sub }]}>OFF threshold (°C)</Text>
+              <TextInput
+                value={heaterOffTempC}
+                onChangeText={setHeaterOffTempC}
+                keyboardType="decimal-pad"
+                placeholder="23"
+                placeholderTextColor={isDark ? 'rgba(231,239,233,0.35)' : 'rgba(17,24,21,0.35)'}
+                style={[styles.input, { color: text, borderColor: border }]}
+              />
+            </View>
+          </View>
+          <Text style={[styles.help, { color: sub }]}>ON must be lower than OFF. Blank uses 21 / 23.</Text>
+
+          <View style={[styles.row, { marginTop: 10 }]}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.help, { color: sub }]}>Max burst (s)</Text>
+              <TextInput
+                value={heaterMaxOnSec}
+                onChangeText={setHeaterMaxOnSec}
+                keyboardType="numeric"
+                placeholder="900"
+                placeholderTextColor={isDark ? 'rgba(231,239,233,0.35)' : 'rgba(17,24,21,0.35)'}
+                style={[styles.input, { color: text, borderColor: border }]}
+              />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.help, { color: sub }]}>Cooldown (s)</Text>
+              <TextInput
+                value={heaterMinOffSec}
+                onChangeText={setHeaterMinOffSec}
+                keyboardType="numeric"
+                placeholder="60"
+                placeholderTextColor={isDark ? 'rgba(231,239,233,0.35)' : 'rgba(17,24,21,0.35)'}
+                style={[styles.input, { color: text, borderColor: border }]}
+              />
+            </View>
+          </View>
+          <Text style={[styles.help, { color: sub }]}>Max burst 30–3600 s, cooldown 15–1800 s. Blank uses 900 / 60.</Text>
+
+          <View style={[styles.row, { marginTop: 10 }]}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.label, { color: sub }]}>Manual Override</Text>
+              <Text style={[styles.help, { color: sub }]}>Force heater state regardless of temperature.</Text>
+            </View>
+            <Switch value={manualHeaterOverride} onValueChange={setManualHeaterOverride} thumbColor={palette.forestGreen} />
+          </View>
+
+          <View style={[styles.row, { marginTop: 10, opacity: manualHeaterOverride ? 1 : 0.5 }]}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.label, { color: sub }]}>Heater</Text>
+              <Text style={[styles.help, { color: sub }]}>{manualHeaterOn ? 'ON' : 'OFF'}</Text>
+            </View>
+            <Switch
+              value={manualHeaterOn}
+              onValueChange={setManualHeaterOn}
+              disabled={!manualHeaterOverride}
               thumbColor={palette.forestGreen}
             />
           </View>

@@ -2,7 +2,19 @@ import { StyleSheet, Text, View } from 'react-native';
 import { palette } from '../theme/palette';
 import { useColorScheme } from 'react-native';
 
-export default function StatusCard({ online, lastSeenText, fanOn }) {
+function ActuatorPill({ label, on, isDark }) {
+  const bg = on ? palette.forestGreen : isDark ? 'rgba(231,239,233,0.10)' : 'rgba(17,24,21,0.06)';
+  const fg = on ? 'white' : isDark ? palette.subtextDark : palette.subtextLight;
+  return (
+    <View style={[styles.pill, { backgroundColor: bg }]}>
+      <Text style={[styles.pillText, { color: fg }]}>
+        {label}: {on ? 'ON' : 'OFF'}
+      </Text>
+    </View>
+  );
+}
+
+export default function StatusCard({ online, lastSeenText, fanOn, intakeFanOn, sprinklerOn, heaterOn }) {
   const scheme = useColorScheme();
   const isDark = scheme === 'dark';
 
@@ -17,8 +29,12 @@ export default function StatusCard({ online, lastSeenText, fanOn }) {
       <View style={styles.row}>
         <View style={[styles.dot, { backgroundColor: dotColor }]} />
         <Text style={[styles.label, { color: text }]}>{online ? 'Online' : 'Offline'}</Text>
-        <View style={{ flex: 1 }} />
-        <Text style={[styles.value, { color: text }]}>{fanOn ? 'Fan: ON' : 'Fan: OFF'}</Text>
+      </View>
+      <View style={styles.pillRow}>
+        <ActuatorPill label="Exhaust" on={!!fanOn} isDark={isDark} />
+        <ActuatorPill label="Intake" on={!!intakeFanOn} isDark={isDark} />
+        <ActuatorPill label="Sprinkler" on={!!sprinklerOn} isDark={isDark} />
+        <ActuatorPill label="Heater" on={!!heaterOn} isDark={isDark} />
       </View>
       <Text style={[styles.sub, { color: sub }]}>{lastSeenText}</Text>
     </View>
@@ -34,7 +50,9 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center' },
   dot: { width: 10, height: 10, borderRadius: 5, marginRight: 10 },
   label: { fontSize: 16, fontWeight: '700' },
-  value: { fontSize: 14, fontWeight: '700' },
-  sub: { marginTop: 6, fontSize: 12 },
+  pillRow: { flexDirection: 'row', gap: 6, marginTop: 10, flexWrap: 'wrap' },
+  pill: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999 },
+  pillText: { fontSize: 12, fontWeight: '700' },
+  sub: { marginTop: 8, fontSize: 12 },
 });
 

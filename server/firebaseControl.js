@@ -12,13 +12,47 @@ const { firebaseConfig } = require('./firebaseConfig');
 let initPromise = null;
 let firebaseReady = false;
 
+// Target growing conditions (per thesis): 21–27 °C, 80–90 % RH, 1000–2000 ppm CO₂.
+// Upper bounds drive the exhaust fan (fan-on when above). Lower bounds are
+// informational + used for alerting only — the system has no way to heat,
+// humidify, or enrich CO₂.
 function defaultControl() {
   return {
-    co2ThresholdPpm: 800,
-    tempFanOnC: 32,
-    humFanOnPct: 92,
+    // upper bounds (exhaust + intake fan turn on above)
+    co2ThresholdPpm: 2000,
+    tempFanOnC: 27,
+    humFanOnPct: 90,
+    // lower bounds (alert-only; sprinkler uses its own hysteresis band below)
+    co2MinPpm: 1000,
+    tempMinC: 21,
+    humMinPct: 80,
+    // exhaust fan manual override
     manualOverride: false,
     manualFanOn: false,
+    // intake fan (independent from exhaust: turns on when CO2 or temp above max)
+    intakeFanEnabled: true,
+    manualIntakeFanOverride: false,
+    manualIntakeFanOn: false,
+    // sprinkler / humidifier — hysteresis + safety timers
+    // on when hum <= sprinklerOnHumPct, off when hum >= sprinklerOffHumPct
+    // capped at sprinklerMaxOnSec per burst with sprinklerMinOffSec cooldown
+    sprinklerEnabled: true,
+    sprinklerOnHumPct: 78,
+    sprinklerOffHumPct: 85,
+    sprinklerMaxOnSec: 60,
+    sprinklerMinOffSec: 300,
+    manualSprinklerOverride: false,
+    manualSprinklerOn: false,
+    // heater — hysteresis + safety timers (mirror of sprinkler, temperature side)
+    // on when temp <= heaterOnTempC, off when temp >= heaterOffTempC
+    // capped at heaterMaxOnSec per burst with heaterMinOffSec cooldown
+    heaterEnabled: true,
+    heaterOnTempC: 21,
+    heaterOffTempC: 23,
+    heaterMaxOnSec: 900,
+    heaterMinOffSec: 60,
+    manualHeaterOverride: false,
+    manualHeaterOn: false,
   };
 }
 
@@ -26,25 +60,61 @@ function defaultControl() {
  * @param {Record<string, unknown>} control
  * @param {unknown} raw
  */
+/**
+ * Field validation rules shared by applyControlSnapshot and
+ * mergeControlToFirebase. `int: true` rounds before range-checking.
+ */
+const CONTROL_NUM_FIELDS = [
+  // upper bounds
+  { key: 'co2ThresholdPpm', min: 400, max: 10000, int: true },
+  { key: 'tempFanOnC',      min: 15,  max: 45 },
+  { key: 'humFanOnPct',     min: 55,  max: 100 },
+  // lower bounds
+  { key: 'co2MinPpm',       min: 300, max: 5000, int: true },
+  { key: 'tempMinC',        min: 5,   max: 30 },
+  { key: 'humMinPct',       min: 30,  max: 95 },
+  // sprinkler hysteresis + timers
+  { key: 'sprinklerOnHumPct',  min: 30, max: 95 },
+  { key: 'sprinklerOffHumPct', min: 35, max: 100 },
+  { key: 'sprinklerMaxOnSec',  min: 5,  max: 600,  int: true },
+  { key: 'sprinklerMinOffSec', min: 30, max: 3600, int: true },
+  // heater hysteresis + timers
+  { key: 'heaterOnTempC',  min: 5,   max: 28 },
+  { key: 'heaterOffTempC', min: 6,   max: 30 },
+  { key: 'heaterMaxOnSec', min: 30,  max: 3600, int: true },
+  { key: 'heaterMinOffSec', min: 15, max: 1800, int: true },
+];
+
+const CONTROL_BOOL_FIELDS = [
+  'manualOverride',
+  'manualFanOn',
+  'intakeFanEnabled',
+  'manualIntakeFanOverride',
+  'manualIntakeFanOn',
+  'sprinklerEnabled',
+  'manualSprinklerOverride',
+  'manualSprinklerOn',
+  'heaterEnabled',
+  'manualHeaterOverride',
+  'manualHeaterOn',
+];
+
+function coerceNumField(raw, spec) {
+  const v = raw[spec.key];
+  if (typeof v !== 'number' || !Number.isFinite(v)) return undefined;
+  const n = spec.int ? Math.round(v) : v;
+  if (n < spec.min || n > spec.max) return undefined;
+  return n;
+}
+
 function applyControlSnapshot(control, raw) {
   if (!raw || typeof raw !== 'object') return;
-  if (typeof raw.co2ThresholdPpm === 'number') {
-    const v = Math.round(raw.co2ThresholdPpm);
-    if (v >= 400 && v <= 10000) control.co2ThresholdPpm = v;
+  for (const spec of CONTROL_NUM_FIELDS) {
+    const v = coerceNumField(raw, spec);
+    if (v !== undefined) control[spec.key] = v;
   }
-  if (typeof raw.tempFanOnC === 'number') {
-    const v = raw.tempFanOnC;
-    if (v >= 15 && v <= 45) control.tempFanOnC = v;
-  }
-  if (typeof raw.humFanOnPct === 'number') {
-    const v = raw.humFanOnPct;
-    if (v >= 55 && v <= 100) control.humFanOnPct = v;
-  }
-  if (typeof raw.manualOverride === 'boolean') {
-    control.manualOverride = raw.manualOverride;
-  }
-  if (typeof raw.manualFanOn === 'boolean') {
-    control.manualFanOn = raw.manualFanOn;
+  for (const key of CONTROL_BOOL_FIELDS) {
+    if (typeof raw[key] === 'boolean') control[key] = raw[key];
   }
 }
 
@@ -131,20 +201,13 @@ async function mergeControlToFirebase(deviceId, body) {
   const { db } = await getFirebaseContext();
   const patch = {};
   const b = body || {};
-  if (typeof b.co2ThresholdPpm === 'number') {
-    const v = Math.round(b.co2ThresholdPpm);
-    if (v >= 400 && v <= 10000) patch.co2ThresholdPpm = v;
+  for (const spec of CONTROL_NUM_FIELDS) {
+    const v = coerceNumField(b, spec);
+    if (v !== undefined) patch[spec.key] = v;
   }
-  if (typeof b.tempFanOnC === 'number') {
-    const v = b.tempFanOnC;
-    if (v >= 15 && v <= 45) patch.tempFanOnC = v;
+  for (const key of CONTROL_BOOL_FIELDS) {
+    if (typeof b[key] === 'boolean') patch[key] = b[key];
   }
-  if (typeof b.humFanOnPct === 'number') {
-    const v = b.humFanOnPct;
-    if (v >= 55 && v <= 100) patch.humFanOnPct = v;
-  }
-  if (typeof b.manualOverride === 'boolean') patch.manualOverride = b.manualOverride;
-  if (typeof b.manualFanOn === 'boolean') patch.manualFanOn = b.manualFanOn;
   if (Object.keys(patch).length === 0) return;
   await update(ref(db, `devices/${deviceId}/control`), patch);
 }
@@ -174,6 +237,40 @@ async function mergeHistory24hToFirebase(deviceId, historyObj) {
   if (!deviceId || !historyObj || typeof historyObj !== 'object') return;
   const { db } = await getFirebaseContext();
   await set(ref(db, `devices/${deviceId}/history24h`), historyObj);
+}
+
+/**
+ * Append a single persistent history point at `devices/<id>/history`.
+ * Uses push() so entries are chronologically sortable and never overwritten.
+ * @param {string} deviceId
+ * @param {{ tsMs: number, tempC: number|null, humPct: number|null, co2ppm: number|null, fanOn?: boolean }} point
+ * @returns {Promise<void>}
+ */
+async function pushHistoryPoint(deviceId, point) {
+  if (!deviceId || !point || typeof point !== 'object') return;
+  const { db } = await getFirebaseContext();
+  await push(ref(db, `devices/${deviceId}/history`), point);
+}
+
+/**
+ * Load history points from RTDB newer than `sinceMs`. Best-effort; returns
+ * an array sorted by tsMs ascending. Used to backfill the in-memory buffer
+ * after a server restart so /history24h isn't empty.
+ * @param {string} deviceId
+ * @param {number} sinceMs
+ * @returns {Promise<Array<{ tsMs: number, tempC: number|null, humPct: number|null, co2ppm: number|null, fanOn?: boolean }>>}
+ */
+async function loadRecentHistory(deviceId, sinceMs) {
+  if (!deviceId) return [];
+  const { db } = await getFirebaseContext();
+  const snap = await get(ref(db, `devices/${deviceId}/history`));
+  if (!snap.exists()) return [];
+  const v = snap.val();
+  if (!v || typeof v !== 'object') return [];
+  const cutoff = typeof sinceMs === 'number' ? sinceMs : 0;
+  return Object.values(v)
+    .filter((p) => p && typeof p === 'object' && typeof p.tsMs === 'number' && p.tsMs >= cutoff)
+    .sort((a, b) => a.tsMs - b.tsMs);
 }
 
 /**
@@ -222,6 +319,8 @@ module.exports = {
   mergeControlToFirebase,
   mergeLiveToFirebase,
   mergeHistory24hToFirebase,
+  pushHistoryPoint,
+  loadRecentHistory,
   appendAlert,
   getPushTokens,
   removePushTokenKey,

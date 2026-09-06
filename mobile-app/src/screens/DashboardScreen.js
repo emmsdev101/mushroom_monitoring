@@ -16,32 +16,51 @@ function formatAge(ms) {
   return `${h}h ago`;
 }
 
-/** Uses optional comfort floor; fan-on ceiling from Settings (`control`). */
-function statusForTemp(tempC, tempFanOnC) {
-  if (tempC == null) return 'warn';
-  const hi = typeof tempFanOnC === 'number' ? tempFanOnC : 32;
-  if (tempC >= hi) return 'bad';
-  if (tempC >= hi - 2) return 'warn';
-  if (tempC < 12) return 'bad';
-  if (tempC < 16) return 'warn';
+// Status derived from the target range [lo, hi]:
+//   inside range        -> 'good'
+//   near either edge    -> 'warn'
+//   outside range       -> 'bad'
+// `nearFrac` sets the "near-edge" band width as a fraction of the range.
+function statusInRange(value, lo, hi, nearFrac = 0.1) {
+  if (value == null) return 'warn';
+  if (lo == null || hi == null || !(hi > lo)) return 'good';
+  if (value >= hi || value <= lo) return 'bad';
+  const span = hi - lo;
+  const pad = span * nearFrac;
+  if (value >= hi - pad || value <= lo + pad) return 'warn';
   return 'good';
 }
 
-function statusForHum(humPct, humFanOnPct) {
-  if (humPct == null) return 'warn';
-  const hi = typeof humFanOnPct === 'number' ? humFanOnPct : 92;
-  if (humPct >= hi) return 'bad';
-  if (humPct >= hi - 3) return 'warn';
-  if (humPct < 50) return 'bad';
-  if (humPct < 60) return 'warn';
-  return 'good';
+// Thesis target ranges — used as fallbacks when `control` hasn't loaded yet.
+const DEFAULT_TEMP_MIN_C = 21;
+const DEFAULT_TEMP_MAX_C = 27;
+const DEFAULT_HUM_MIN_PCT = 80;
+const DEFAULT_HUM_MAX_PCT = 90;
+const DEFAULT_CO2_MIN_PPM = 1000;
+const DEFAULT_CO2_MAX_PPM = 2000;
+
+function statusForTemp(tempC, lo, hi) {
+  return statusInRange(
+    tempC,
+    typeof lo === 'number' ? lo : DEFAULT_TEMP_MIN_C,
+    typeof hi === 'number' ? hi : DEFAULT_TEMP_MAX_C
+  );
 }
 
-function statusForCo2(co2ppm, threshold) {
-  if (co2ppm == null) return 'warn';
-  if (threshold != null && co2ppm > threshold + 300) return 'bad';
-  if (threshold != null && co2ppm > threshold) return 'warn';
-  return 'good';
+function statusForHum(humPct, lo, hi) {
+  return statusInRange(
+    humPct,
+    typeof lo === 'number' ? lo : DEFAULT_HUM_MIN_PCT,
+    typeof hi === 'number' ? hi : DEFAULT_HUM_MAX_PCT
+  );
+}
+
+function statusForCo2(co2ppm, lo, hi) {
+  return statusInRange(
+    co2ppm,
+    typeof lo === 'number' ? lo : DEFAULT_CO2_MIN_PPM,
+    typeof hi === 'number' ? hi : DEFAULT_CO2_MAX_PPM
+  );
 }
 
 export default function DashboardScreen({ deviceId }) {
@@ -64,6 +83,9 @@ export default function DashboardScreen({ deviceId }) {
     const humPct = typeof v.humPct === 'number' ? v.humPct : null;
     const co2ppm = typeof v.co2ppm === 'number' ? v.co2ppm : null;
     const fanOn = !!v.fanOn;
+    const intakeFanOn = !!v.intakeFanOn;
+    const sprinklerOn = !!v.sprinklerOn;
+    const heaterOn = !!v.heaterOn;
 
     const co2ThresholdPpm =
       typeof c.co2ThresholdPpm === 'number'
@@ -73,6 +95,9 @@ export default function DashboardScreen({ deviceId }) {
           : null;
     const tempFanOnC = typeof c.tempFanOnC === 'number' ? c.tempFanOnC : null;
     const humFanOnPct = typeof c.humFanOnPct === 'number' ? c.humFanOnPct : null;
+    const tempMinC = typeof c.tempMinC === 'number' ? c.tempMinC : null;
+    const humMinPct = typeof c.humMinPct === 'number' ? c.humMinPct : null;
+    const co2MinPpm = typeof c.co2MinPpm === 'number' ? c.co2MinPpm : null;
 
     const hb = typeof heartbeat.value === 'number' ? heartbeat.value : null;
     const hbFb = typeof heartbeatFallback.value === 'number' ? heartbeatFallback.value : null;
@@ -87,8 +112,14 @@ export default function DashboardScreen({ deviceId }) {
       humPct,
       co2ppm,
       fanOn,
+      intakeFanOn,
+      sprinklerOn,
+      heaterOn,
+      co2MinPpm,
       co2ThresholdPpm,
+      tempMinC,
       tempFanOnC,
+      humMinPct,
       humFanOnPct,
       online,
       lastSeenText:
@@ -105,18 +136,16 @@ export default function DashboardScreen({ deviceId }) {
     );
   }
 
-  const tempSub =
-    derived.tempFanOnC != null
-      ? `Fan if above ${derived.tempFanOnC.toFixed(0)} °C (set in Thresholds)`
-      : 'Set temp fan-on in Settings → Thresholds';
-  const humSub =
-    derived.humFanOnPct != null
-      ? `Fan if above ${derived.humFanOnPct.toFixed(0)} % (set in Thresholds)`
-      : 'Set humidity fan-on in Settings → Thresholds';
-  const co2Sub =
-    derived.co2ThresholdPpm != null
-      ? `Fan if above ${derived.co2ThresholdPpm} ppm (set in Thresholds)`
-      : 'Set CO₂ threshold in Settings → Thresholds';
+  const tempLo = derived.tempMinC ?? DEFAULT_TEMP_MIN_C;
+  const tempHi = derived.tempFanOnC ?? DEFAULT_TEMP_MAX_C;
+  const humLo = derived.humMinPct ?? DEFAULT_HUM_MIN_PCT;
+  const humHi = derived.humFanOnPct ?? DEFAULT_HUM_MAX_PCT;
+  const co2Lo = derived.co2MinPpm ?? DEFAULT_CO2_MIN_PPM;
+  const co2Hi = derived.co2ThresholdPpm ?? DEFAULT_CO2_MAX_PPM;
+
+  const tempSub = `Target ${tempLo.toFixed(0)}–${tempHi.toFixed(0)} °C · fan on above ${tempHi.toFixed(0)}`;
+  const humSub = `Target ${humLo.toFixed(0)}–${humHi.toFixed(0)} % · fan on above ${humHi.toFixed(0)}`;
+  const co2Sub = `Target ${co2Lo}–${co2Hi} ppm · fan on above ${co2Hi}`;
 
   return (
     <ScrollView contentContainerStyle={[styles.container, { backgroundColor: bg }]}>
@@ -125,28 +154,35 @@ export default function DashboardScreen({ deviceId }) {
         Device: {deviceId} — live temperature, humidity, and CO₂ from the nursery.
       </Text>
 
-      <StatusCard online={derived.online} lastSeenText={derived.lastSeenText} fanOn={derived.fanOn} />
+      <StatusCard
+        online={derived.online}
+        lastSeenText={derived.lastSeenText}
+        fanOn={derived.fanOn}
+        intakeFanOn={derived.intakeFanOn}
+        sprinklerOn={derived.sprinklerOn}
+        heaterOn={derived.heaterOn}
+      />
 
       <View style={styles.grid}>
         <MetricCard
           title="Temperature"
           value={derived.tempC != null ? derived.tempC.toFixed(1) : null}
           unit="°C"
-          status={statusForTemp(derived.tempC, derived.tempFanOnC)}
+          status={statusForTemp(derived.tempC, derived.tempMinC, derived.tempFanOnC)}
           subtitle={tempSub}
         />
         <MetricCard
           title="Humidity"
           value={derived.humPct != null ? derived.humPct.toFixed(0) : null}
           unit="%"
-          status={statusForHum(derived.humPct, derived.humFanOnPct)}
+          status={statusForHum(derived.humPct, derived.humMinPct, derived.humFanOnPct)}
           subtitle={humSub}
         />
         <MetricCard
           title="CO₂"
           value={derived.co2ppm != null ? derived.co2ppm.toFixed(0) : null}
           unit="ppm"
-          status={statusForCo2(derived.co2ppm, derived.co2ThresholdPpm)}
+          status={statusForCo2(derived.co2ppm, derived.co2MinPpm, derived.co2ThresholdPpm)}
           subtitle={co2Sub}
         />
       </View>

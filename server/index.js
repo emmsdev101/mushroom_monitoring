@@ -17,6 +17,15 @@ fb.warmup().catch(() => {});
 
 const ALERT_COOLDOWN_MS = 5 * 60 * 1000;
 
+// History persistence policy: save a point only when it's a significant change
+// from the last saved point, OR when at least HISTORY_MAX_INTERVAL_MS has
+// elapsed since the last saved point (hourly heartbeat).
+const HISTORY_MAX_INTERVAL_MS = 60 * 60 * 1000;
+const HISTORY_DELTA_TEMP_C = 0.5;
+const HISTORY_DELTA_HUM_PCT = 3;
+const HISTORY_DELTA_CO2_PPM = 50;
+const HISTORY_WINDOW_MS = 24 * 60 * 60 * 1000;
+
 async function sendExpoPush(tokens, title, body, data = {}) {
   if (!tokens.length) return;
   const messages = tokens.map((t) => ({
@@ -52,39 +61,81 @@ async function sendExpoPush(tokens, title, body, data = {}) {
   }
 }
 
+// Reads the target range (min..max) for each metric from the control snapshot.
+function bandsFrom(d) {
+  const c = d.control || {};
+  return {
+    co2: {
+      min: typeof c.co2MinPpm === 'number' ? c.co2MinPpm : null,
+      max: typeof c.co2ThresholdPpm === 'number' ? c.co2ThresholdPpm : null,
+    },
+    temp: {
+      min: typeof c.tempMinC === 'number' ? c.tempMinC : null,
+      max: typeof c.tempFanOnC === 'number' ? c.tempFanOnC : null,
+    },
+    hum: {
+      min: typeof c.humMinPct === 'number' ? c.humMinPct : null,
+      max: typeof c.humFanOnPct === 'number' ? c.humFanOnPct : null,
+    },
+  };
+}
+
+// Emits alerts when a reading falls outside its target range (high or low).
+// `type` values: co2, co2_low, temp, temp_low, hum, hum_low.
 function thresholdAlerts(d, b) {
   const out = [];
   const tempC = typeof b.tempC === 'number' ? b.tempC : null;
   const humPct = typeof b.humPct === 'number' ? b.humPct : null;
   const co2ppm = typeof b.co2ppm === 'number' ? b.co2ppm : null;
+  const bands = bandsFrom(d);
 
-  const co2Thr = typeof d.control?.co2ThresholdPpm === 'number' ? d.control.co2ThresholdPpm : null;
-  const tThr = typeof d.control?.tempFanOnC === 'number' ? d.control.tempFanOnC : null;
-  const hThr = typeof d.control?.humFanOnPct === 'number' ? d.control.humFanOnPct : null;
+  if (bands.co2.max != null && co2ppm != null && co2ppm > 0 && co2ppm >= bands.co2.max) {
+    out.push({ type: 'co2', value: co2ppm, thr: bands.co2.max });
+  } else if (bands.co2.min != null && co2ppm != null && co2ppm > 0 && co2ppm <= bands.co2.min) {
+    out.push({ type: 'co2_low', value: co2ppm, thr: bands.co2.min });
+  }
 
-  if (co2Thr != null && co2ppm != null && co2ppm > 0 && co2ppm >= co2Thr) out.push({ type: 'co2', value: co2ppm, thr: co2Thr });
-  if (tThr != null && tempC != null && tempC >= tThr) out.push({ type: 'temp', value: tempC, thr: tThr });
-  if (hThr != null && humPct != null && humPct >= hThr) out.push({ type: 'hum', value: humPct, thr: hThr });
+  if (bands.temp.max != null && tempC != null && tempC >= bands.temp.max) {
+    out.push({ type: 'temp', value: tempC, thr: bands.temp.max });
+  } else if (bands.temp.min != null && tempC != null && tempC <= bands.temp.min) {
+    out.push({ type: 'temp_low', value: tempC, thr: bands.temp.min });
+  }
+
+  if (bands.hum.max != null && humPct != null && humPct >= bands.hum.max) {
+    out.push({ type: 'hum', value: humPct, thr: bands.hum.max });
+  } else if (bands.hum.min != null && humPct != null && humPct <= bands.hum.min) {
+    out.push({ type: 'hum_low', value: humPct, thr: bands.hum.min });
+  }
+
   return out;
 }
 
+// For each metric, report whether it's currently out-of-band (above OR below)
+// so the caller can emit a single "back to normal" transition alert.
 function currentThresholdState(d, b) {
   const tempC = typeof b.tempC === 'number' ? b.tempC : null;
   const humPct = typeof b.humPct === 'number' ? b.humPct : null;
   const co2ppm = typeof b.co2ppm === 'number' ? b.co2ppm : null;
+  const bands = bandsFrom(d);
 
-  const co2Thr = typeof d.control?.co2ThresholdPpm === 'number' ? d.control.co2ThresholdPpm : null;
-  const tThr = typeof d.control?.tempFanOnC === 'number' ? d.control.tempFanOnC : null;
-  const hThr = typeof d.control?.humFanOnPct === 'number' ? d.control.humFanOnPct : null;
+  function state(value, band, positive = true) {
+    if (value == null) return { above: false, value, thr: band.max };
+    if (positive && value <= 0) return { above: false, value, thr: band.max };
+    const highHit = band.max != null && value >= band.max;
+    const lowHit = band.min != null && value <= band.min;
+    // `above` here means "out of band" (name kept for backwards compat with the
+    // recovery-alert code path that used it purely as an in/out flag).
+    return { above: highHit || lowHit, value, thr: highHit ? band.max : band.min };
+  }
 
   return {
-    co2: { above: co2Thr != null && co2ppm != null && co2ppm > 0 && co2ppm >= co2Thr, value: co2ppm, thr: co2Thr },
-    temp: { above: tThr != null && tempC != null && tempC >= tThr, value: tempC, thr: tThr },
-    hum: { above: hThr != null && humPct != null && humPct >= hThr, value: humPct, thr: hThr },
+    co2: state(co2ppm, bands.co2, true),
+    temp: state(tempC, bands.temp, false),
+    hum: state(humPct, bands.hum, false),
   };
 }
 
-/** @type {Map<string, { control: object, live: object | null, history: object[], lastTelemetrySig: string, alertState: Record<string, { above: boolean, lastSentMs: number }> }>} */
+/** @type {Map<string, { control: object, live: object | null, history: object[], lastTelemetrySig: string, lastPersisted: object | null, historyBackfilled: boolean, alertState: Record<string, { above: boolean, lastSentMs: number }> }>} */
 const devices = new Map();
 
 function telemetrySignature(b) {
@@ -93,15 +144,39 @@ function telemetrySignature(b) {
   const h = typeof b.humPct === 'number' ? b.humPct : null;
   const c = typeof b.co2ppm === 'number' ? b.co2ppm : null;
   const fan = typeof b.fanOn === 'boolean' ? b.fanOn : !!b.fanOn;
+  const intake = typeof b.intakeFanOn === 'boolean' ? b.intakeFanOn : !!b.intakeFanOn;
+  const sprk = typeof b.sprinklerOn === 'boolean' ? b.sprinklerOn : !!b.sprinklerOn;
+  const heat = typeof b.heaterOn === 'boolean' ? b.heaterOn : !!b.heaterOn;
   // Use a stable string; rounding reduces noisy tiny changes.
   const tR = t == null ? null : Math.round(t * 10) / 10;
   const hR = h == null ? null : Math.round(h * 10) / 10;
   const cR = c == null ? null : Math.round(c);
-  return `${tR}|${hR}|${cR}|${fan ? 1 : 0}`;
+  return `${tR}|${hR}|${cR}|${fan ? 1 : 0}|${intake ? 1 : 0}|${sprk ? 1 : 0}|${heat ? 1 : 0}`;
+}
+
+/**
+ * Decide if a new telemetry point differs enough from the last persisted one
+ * to be written to the durable history. First point (prev == null) always
+ * qualifies. Time-based fallback is handled separately by the caller.
+ */
+function isSignificantChange(prev, curr) {
+  if (!prev) return true;
+  const t1 = prev.tempC, t2 = curr.tempC;
+  const h1 = prev.humPct, h2 = curr.humPct;
+  const c1 = prev.co2ppm, c2 = curr.co2ppm;
+  if (typeof t2 === 'number' && (typeof t1 !== 'number' || Math.abs(t1 - t2) >= HISTORY_DELTA_TEMP_C)) return true;
+  if (typeof h2 === 'number' && (typeof h1 !== 'number' || Math.abs(h1 - h2) >= HISTORY_DELTA_HUM_PCT)) return true;
+  if (typeof c2 === 'number' && (typeof c1 !== 'number' || Math.abs(c1 - c2) >= HISTORY_DELTA_CO2_PPM)) return true;
+  // Any actuator flip is a "significant" event and should be persisted.
+  if (typeof curr.fanOn === 'boolean' && prev.fanOn !== curr.fanOn) return true;
+  if (typeof curr.intakeFanOn === 'boolean' && prev.intakeFanOn !== curr.intakeFanOn) return true;
+  if (typeof curr.sprinklerOn === 'boolean' && prev.sprinklerOn !== curr.sprinklerOn) return true;
+  if (typeof curr.heaterOn === 'boolean' && prev.heaterOn !== curr.heaterOn) return true;
+  return false;
 }
 
 function history24hPayload(d) {
-  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  const cutoff = Date.now() - HISTORY_WINDOW_MS;
   const points = d.history.filter((h) => h.tsMs >= cutoff);
   const out = {};
   points.forEach((p, i) => {
@@ -112,13 +187,40 @@ function history24hPayload(d) {
 
 function getOrCreate(deviceId) {
   if (!devices.has(deviceId)) {
-    devices.set(deviceId, {
+    const state = {
       control: { ...fb.defaultControl() },
       live: null,
       history: [],
       lastTelemetrySig: '',
+      lastPersisted: null,
+      historyBackfilled: false,
       alertState: {},
-    });
+    };
+    devices.set(deviceId, state);
+
+    // Backfill in-memory 24h buffer from RTDB so /history24h and the mobile
+    // history chart aren't empty after a server restart. Best-effort.
+    fb.loadRecentHistory(deviceId, Date.now() - HISTORY_WINDOW_MS)
+      .then((points) => {
+        if (!points.length) {
+          state.historyBackfilled = true;
+          return;
+        }
+        // Merge without duplicating anything the live handler already pushed.
+        const seen = new Set(state.history.map((p) => p.tsMs));
+        for (const p of points) {
+          if (!seen.has(p.tsMs)) state.history.push(p);
+        }
+        state.history.sort((a, b) => a.tsMs - b.tsMs);
+        const last = state.history[state.history.length - 1];
+        if (last && !state.lastPersisted) state.lastPersisted = { ...last };
+        state.historyBackfilled = true;
+        console.log(`[history] backfilled device=${deviceId} points=${points.length}`);
+      })
+      .catch((e) => {
+        state.historyBackfilled = true;
+        console.warn(`[history] backfill failed device=${deviceId}:`, e.message);
+      });
   }
   fb.ensureControlSubscription(deviceId, (id, control) => {
     const d = devices.get(id);
@@ -337,27 +439,57 @@ app.post('/api/devices/:deviceId/telemetry', auth, (req, res) => {
   const unchanged = sig && sig === d.lastTelemetrySig;
   const live = { ...b, serverTsMs: now };
   d.live = live;
+
+  // `live` is a chatty per-5s snapshot; mirror only when values changed at
+  // the coarse signature level so RTDB writes stay reasonable.
   if (!unchanged) {
     d.lastTelemetrySig = sig;
-
     fb.mergeLiveToFirebase(deviceId, live).catch((e) => {
       console.warn('[firebase] live not mirrored to RTDB:', e.message);
     });
+  }
 
-    d.history.push({
-      tsMs: now,
-      // RTDB rejects `undefined`, so coerce missing fields to null.
-      co2ppm: typeof b.co2ppm === 'number' ? b.co2ppm : null,
-      tempC: typeof b.tempC === 'number' ? b.tempC : null,
-      humPct: typeof b.humPct === 'number' ? b.humPct : null,
-    });
+  // History persistence: save a point only on a significant change OR after
+  // HISTORY_MAX_INTERVAL_MS has elapsed since the last persisted point.
+  const candidate = {
+    tsMs: now,
+    // RTDB rejects `undefined`, so coerce missing fields to null.
+    co2ppm: typeof b.co2ppm === 'number' ? b.co2ppm : null,
+    tempC: typeof b.tempC === 'number' ? b.tempC : null,
+    humPct: typeof b.humPct === 'number' ? b.humPct : null,
+    fanOn: typeof b.fanOn === 'boolean' ? b.fanOn : !!b.fanOn,
+    intakeFanOn: typeof b.intakeFanOn === 'boolean' ? b.intakeFanOn : !!b.intakeFanOn,
+    sprinklerOn: typeof b.sprinklerOn === 'boolean' ? b.sprinklerOn : !!b.sprinklerOn,
+    heaterOn: typeof b.heaterOn === 'boolean' ? b.heaterOn : !!b.heaterOn,
+  };
+  const prev = d.lastPersisted;
+  const elapsedSincePersist = prev ? now - prev.tsMs : Infinity;
+  const significant = isSignificantChange(prev, candidate);
+  const timedOut = elapsedSincePersist >= HISTORY_MAX_INTERVAL_MS;
+  const shouldPersist = significant || timedOut;
+
+  if (shouldPersist) {
+    d.history.push(candidate);
     const maxHist = 5000;
     if (d.history.length > maxHist) d.history.splice(0, d.history.length - maxHist);
+    d.lastPersisted = { ...candidate };
 
+    // Durable append-only log — survives restarts.
+    fb.pushHistoryPoint(deviceId, candidate).catch((e) => {
+      console.warn('[firebase] history point not appended to RTDB:', e.message);
+    });
+
+    // Rolling 24h view the mobile app reads. Only refreshed when we actually
+    // persisted a point, so this write frequency now matches history writes.
     const histOut = history24hPayload(d);
     fb.mergeHistory24hToFirebase(deviceId, histOut).catch((e) => {
       console.warn('[firebase] history24h not mirrored to RTDB:', e.message);
     });
+
+    console.log(
+      `[history] persisted device=${deviceId} reason=${significant ? 'delta' : 'hourly'} ` +
+        `tempC=${candidate.tempC ?? '-'} humPct=${candidate.humPct ?? '-'} co2ppm=${candidate.co2ppm ?? '-'} fanOn=${candidate.fanOn}`
+    );
   }
 
   // Push notifications when thresholds are reached (with cooldown).
@@ -372,7 +504,10 @@ app.post('/api/devices/:deviceId/telemetry', auth, (req, res) => {
         const pushTokens = tokenObjs.map((x) => x.token).filter(Boolean);
         console.log(`[alert] device=${deviceId} pushTokens=${pushTokens.length}`);
         for (const a of alerts) {
-          const key = a.type;
+          // Cooldowns are per metric (co2/temp/hum), not per direction, so a
+          // metric flipping directly from low→high still respects the window.
+          const key = a.type.endsWith('_low') ? a.type.slice(0, -'_low'.length) : a.type;
+          const isLow = a.type.endsWith('_low');
           const st = d.alertState[key] || { above: false, lastSentMs: 0 };
           const canSend = !st.above || now - st.lastSentMs >= ALERT_COOLDOWN_MS;
           if (!canSend) {
@@ -380,12 +515,13 @@ app.post('/api/devices/:deviceId/telemetry', auth, (req, res) => {
             continue;
           }
           const title = 'Mushroom Nursery Alert';
+          const direction = isLow ? 'low' : 'high';
           const body =
-            a.type === 'co2'
-              ? `CO₂ high: ${Math.round(a.value)} ppm (threshold ${a.thr})`
-              : a.type === 'temp'
-                ? `Temp high: ${a.value.toFixed(1)} °C (threshold ${a.thr})`
-                : `Humidity high: ${a.value.toFixed(0)}% (threshold ${a.thr})`;
+            key === 'co2'
+              ? `CO₂ ${direction}: ${Math.round(a.value)} ppm (${isLow ? 'min' : 'max'} ${a.thr})`
+              : key === 'temp'
+                ? `Temp ${direction}: ${a.value.toFixed(1)} °C (${isLow ? 'min' : 'max'} ${a.thr})`
+                : `Humidity ${direction}: ${a.value.toFixed(0)}% (${isLow ? 'min' : 'max'} ${a.thr})`;
           // Save alert entry for the app to display (even if push tokens are missing).
           fb.appendAlert(deviceId, {
             tsMs: now,
@@ -456,7 +592,8 @@ app.post('/api/devices/:deviceId/telemetry', auth, (req, res) => {
     `[telemetry] ${new Date(now).toISOString()} device=${deviceId} client=${client} ` +
       `tempC=${b.tempC ?? '-'} humPct=${b.humPct ?? '-'} co2ppm=${b.co2ppm ?? '-'} ` +
       `fanOn=${b.fanOn} co2Thr=${b.co2ThresholdPpm} Tfan>${b.tempFanOnC ?? '-'} Hfan>${b.humFanOnPct ?? '-'} ` +
-      `override=${b.manualOverride} tsMs=${b.tsMs ?? '-'} unchanged=${unchanged ? '1' : '0'}`
+      `override=${b.manualOverride} tsMs=${b.tsMs ?? '-'} unchanged=${unchanged ? '1' : '0'} ` +
+      `persist=${shouldPersist ? (significant ? 'delta' : 'hourly') : '0'}`
   );
 
   res.json({ ok: true });

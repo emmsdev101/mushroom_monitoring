@@ -11,10 +11,9 @@ import {
   View,
   useColorScheme,
 } from 'react-native';
-import { useLocalSession } from '../lib/localAuth';
 import { palette } from '../theme/palette';
 
-export default function LoginScreen() {
+export default function LoginScreen({ session }) {
   const scheme = useColorScheme();
   const isDark = scheme === 'dark';
   const bg = isDark ? palette.bgDark : palette.bgLight;
@@ -26,7 +25,6 @@ export default function LoginScreen() {
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
-  const session = useLocalSession();
 
   const canSubmit = useMemo(() => username.trim().length > 0 && password.length > 0 && !loading, [username, password, loading]);
 
@@ -45,8 +43,10 @@ export default function LoginScreen() {
   return (
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
       <View style={[styles.container, { backgroundColor: bg }]}>
-        <Text style={[styles.h1, { color: text }]}>Mushroom Nursery</Text>
-        <Text style={[styles.p, { color: sub }]}>Admin login</Text>
+        <View style={styles.header}>
+          <Text style={[styles.h1, { color: text }]}>Mushroom Nursery</Text>
+          <Text style={[styles.p, { color: sub }]}>Admin login</Text>
+        </View>
 
         <View style={[styles.card, { backgroundColor: surface, borderColor: border }]}>
           <Text style={[styles.label, { color: sub }]}>Username</Text>
@@ -91,10 +91,11 @@ export default function LoginScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 16, justifyContent: 'center', gap: 10 },
-  h1: { fontSize: 30, fontWeight: '900', letterSpacing: -0.6 },
-  p: { marginTop: -8, fontSize: 13 },
-  card: { borderWidth: 1, borderRadius: 14, padding: 14 },
+  container: { flex: 1, padding: 16, justifyContent: 'center', gap: 14, alignItems: 'center' },
+  header: { width: '100%', alignItems: 'center', marginBottom: 4 },
+  h1: { fontSize: 32, fontWeight: '900', letterSpacing: -0.6, textAlign: 'center' },
+  p: { marginTop: 6, fontSize: 13, textAlign: 'center' },
+  card: { width: '100%', maxWidth: 420, borderWidth: 1, borderRadius: 14, padding: 14 },
   label: { fontSize: 13, fontWeight: '800' },
   input: {
     borderWidth: 1,

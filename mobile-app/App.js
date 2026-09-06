@@ -54,7 +54,7 @@ export default function App() {
     <NavigationContainer theme={theme}>
       <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
       {session.loading || !session.signedIn ? (
-        <LoginScreen />
+        <LoginScreen session={session} />
       ) : (
       <Tab.Navigator
         screenOptions={({ route }) => ({

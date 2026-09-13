@@ -25,6 +25,7 @@ const HISTORY_DELTA_TEMP_C = 0.5;
 const HISTORY_DELTA_HUM_PCT = 3;
 const HISTORY_DELTA_CO2_PPM = 50;
 const HISTORY_WINDOW_MS = 24 * 60 * 60 * 1000;
+const ONLINE_WINDOW_MS = 30 * 1000;
 
 async function sendExpoPush(tokens, title, body, data = {}) {
   if (!tokens.length) return;
@@ -594,9 +595,23 @@ app.post('/api/devices/:deviceId/telemetry', auth, (req, res) => {
   res.json({ ok: true });
 });
 
+function liveWithPresence(d) {
+  const live = d.live && typeof d.live === 'object' ? { ...d.live } : {};
+  const lastTelemetryMs = typeof live.serverTsMs === 'number' ? live.serverTsMs : null;
+  const now = Date.now();
+  const ageMs = lastTelemetryMs != null ? Math.max(0, now - lastTelemetryMs) : null;
+  const online = ageMs != null && ageMs < ONLINE_WINDOW_MS;
+  return {
+    ...live,
+    online,
+    ageMs,
+    serverNowMs: now,
+  };
+}
+
 app.get('/api/devices/:deviceId/live', auth, (req, res) => {
   const d = getOrCreate(req.params.deviceId);
-  res.json(d.live || {});
+  res.json(liveWithPresence(d));
 });
 
 app.get('/api/devices/:deviceId/history24h', auth, (req, res) => {

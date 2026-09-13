@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View, useColorScheme } from 'react-native';
 import MetricCard from '../components/MetricCard';
 import OverridePanel from '../components/OverridePanel';
@@ -6,15 +6,25 @@ import StatusCard from '../components/StatusCard';
 import { devicePath, useApiValue } from '../lib/api';
 import { palette } from '../theme/palette';
 
+const ONLINE_WINDOW_MS = 30 * 1000;
+
 function formatAge(ms) {
   if (ms == null) return 'No recent updates';
-  if (ms < 1000) return 'Just now';
   const s = Math.floor(ms / 1000);
   if (s < 60) return `${s}s ago`;
   const m = Math.floor(s / 60);
   if (m < 60) return `${m}m ago`;
   const h = Math.floor(m / 60);
   return `${h}h ago`;
+}
+
+function useNowMs(intervalMs = 1000) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), intervalMs);
+    return () => clearInterval(id);
+  }, [intervalMs]);
+  return now;
 }
 
 // Status derived from the target range [lo, hi]:
@@ -70,6 +80,17 @@ export default function DashboardScreen({ deviceId }) {
 
   const live = useApiValue(deviceId ? devicePath(deviceId, 'live') : null, { intervalMs: 3000 });
   const control = useApiValue(deviceId ? devicePath(deviceId, 'control') : null, { intervalMs: 5000 });
+  const nowMs = useNowMs(1000);
+  const [presence, setPresence] = useState({ ageMs: null, fetchedAt: 0 });
+
+  useEffect(() => {
+    const v = live.value || {};
+    const fetchedAt = Date.now();
+    let ageMs = null;
+    if (typeof v.ageMs === 'number') ageMs = v.ageMs;
+    else if (typeof v.serverTsMs === 'number') ageMs = Math.max(0, fetchedAt - v.serverTsMs);
+    setPresence({ ageMs, fetchedAt });
+  }, [live.value]);
 
   const bg = isDark ? palette.bgDark : palette.bgLight;
   const text = isDark ? palette.textDark : palette.textLight;
@@ -98,12 +119,12 @@ export default function DashboardScreen({ deviceId }) {
     const humMinPct = typeof c.humMinPct === 'number' ? c.humMinPct : null;
     const co2MinPpm = typeof c.co2MinPpm === 'number' ? c.co2MinPpm : null;
 
-    // Heartbeat is folded into the live payload as `serverTsMs` (set by the
-    // Node server on every telemetry POST). No separate endpoint needed.
-    const ts = typeof v.serverTsMs === 'number' ? v.serverTsMs : null;
-    const age = ts != null ? Date.now() - ts : null;
-
-    const online = ts != null ? age < 90000 : v.tsMs != null;
+    // Seconds since the Arduino's last telemetry POST (same clock as Online).
+    const age =
+      presence.ageMs != null && presence.fetchedAt
+        ? presence.ageMs + Math.max(0, nowMs - presence.fetchedAt)
+        : null;
+    const online = age != null && age < ONLINE_WINDOW_MS;
 
     return {
       tempC,
@@ -121,9 +142,9 @@ export default function DashboardScreen({ deviceId }) {
       humFanOnPct,
       online,
       lastSeenText:
-        ts != null ? `Last update: ${formatAge(age)}` : 'Last update: (waiting for device heartbeat)',
+        age != null ? `Last update: ${formatAge(age)}` : 'Last update: (waiting for device heartbeat)',
     };
-  }, [live.value, control.value]);
+  }, [live.value, control.value, nowMs, presence]);
 
   if (live.loading) {
     return (

@@ -115,6 +115,10 @@ static uint32_t lastControlFetchMs = 0;
 static int lastCo2ppm = -1;
 static float lastTempC = NAN;
 static float lastHumPct = NAN;
+static bool scd41Ok = false;
+static uint32_t lastCo2FreshMs = 0;
+static uint32_t lastScd41BeginMs = 0;
+static uint32_t lastScd41RetryMs = 0;
 
 static int co2ThresholdPpm = DEFAULT_CO2_THRESHOLD_PPM;
 static float tempFanOnC = DEFAULT_TEMP_FAN_ON_C;
@@ -342,33 +346,68 @@ static bool wifiEnsureConnected() {
   return wifiConnectOrPortal();
 }
 
+static bool scd41Begin() {
+  Wire.end();
+  delay(20);
+  Wire.begin(SCD41_I2C_SDA, SCD41_I2C_SCL);
+  Wire.setClock(100000);
+  scd4x.begin(Wire, SCD41_I2C_ADDR_62);
+
+  delay(30);
+  scd4x.wakeUp();
+  delay(30);
+  scd4x.stopPeriodicMeasurement();
+  delay(500);
+  if (scd4x.startPeriodicMeasurement() != 0) {
+    scd41Ok = false;
+    return false;
+  }
+  scd41Ok = true;
+  lastCo2FreshMs = 0;
+  lastScd41BeginMs = millis();
+  Serial.printf("SCD41 started on SDA=%d SCL=%d\n", SCD41_I2C_SDA, SCD41_I2C_SCL);
+  return true;
+}
+
+static void scd41Ensure(uint32_t now) {
+  if (scd41Ok) {
+    if (lastCo2FreshMs == 0) {
+      if (now - lastScd41BeginMs < 25000) return;
+    } else if (now - lastCo2FreshMs <= 20000) {
+      return;
+    }
+  }
+  if (lastScd41RetryMs != 0 && now - lastScd41RetryMs < 15000) return;
+  lastScd41RetryMs = now;
+  Serial.println(scd41Ok ? "SCD41 silent — reinit" : "SCD41 init retry");
+  if (!scd41Begin()) {
+    Serial.println("SCD41 init failed");
+  }
+}
+
 static void scd41ReadCo2ppm(int &ppmOut) {
   ppmOut = lastCo2ppm;
   bool ready = false;
-  if (scd4x.getDataReadyStatus(ready) != 0) return;
+  if (scd4x.getDataReadyStatus(ready) != 0) {
+    scd41Ok = false;
+    return;
+  }
   if (!ready) return;
 
   uint16_t co2 = 0;
   float tS = 0.0f;
   float rhS = 0.0f;
-  if (scd4x.readMeasurement(co2, tS, rhS) != 0) return;
+  if (scd4x.readMeasurement(co2, tS, rhS) != 0) {
+    scd41Ok = false;
+    return;
+  }
+
+  if (co2 == 0) return;
 
   lastCo2ppm = (int)co2;
+  lastCo2FreshMs = millis();
+  scd41Ok = true;
   ppmOut = lastCo2ppm;
-}
-
-static bool scd41Begin() {
-  Wire.begin(SCD41_I2C_SDA, SCD41_I2C_SCL);
-  scd4x.begin(Wire, SCD41_I2C_ADDR_62);
-
-  delay(30);
-  scd4x.wakeUp();
-  scd4x.stopPeriodicMeasurement();
-  delay(500);
-  if (scd4x.startPeriodicMeasurement() != 0) {
-    return false;
-  }
-  return true;
 }
 
 static void applyActuators(float temp, float hum, int co2ppm) {
@@ -566,13 +605,15 @@ void setup() {
   applyWifiFactoryResetIfJumper();
 
   dht.begin();
-  if (!scd41Begin()) {
-    Serial.println("SCD41 init failed");
-  }
 
   if (!wifiConnectOrPortal()) {
     delay(3000);
     ESP.restart();
+  }
+
+  // I2C after Wi-Fi: ESP32 radio init often leaves the SCD41 bus stuck.
+  if (!scd41Begin()) {
+    Serial.println("SCD41 init failed");
   }
 
   if (WiFi.status() == WL_CONNECTED) {
@@ -596,7 +637,9 @@ void loop() {
 
     lastHumPct = dht.readHumidity();
     lastTempC = dht.readTemperature();
+    scd41Ensure(now);
     scd41ReadCo2ppm(lastCo2ppm);
+    Serial.printf("sensors T=%.1f H=%.0f CO2=%d\n", lastTempC, lastHumPct, lastCo2ppm);
     applyActuators(lastTempC, lastHumPct, lastCo2ppm);
 
     if (WiFi.status() == WL_CONNECTED) {

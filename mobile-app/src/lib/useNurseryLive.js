@@ -27,7 +27,7 @@ function useNowMs(intervalMs = 1000) {
 
 export function useNurseryLive(deviceId) {
   const live = useApiValue(deviceId ? devicePath(deviceId, 'live') : null, { intervalMs: 3000 });
-  const control = useApiValue(deviceId ? devicePath(deviceId, 'control') : null, { intervalMs: 5000 });
+  const control = useApiValue(deviceId ? devicePath(deviceId, 'control') : null, { intervalMs: 2000 });
   const nowMs = useNowMs(1000);
   const [presence, setPresence] = useState({ ageMs: null, fetchedAt: 0 });
 

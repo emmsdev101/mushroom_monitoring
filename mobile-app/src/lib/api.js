@@ -27,10 +27,18 @@ function buildHeaders(extra) {
 async function fetchWithTimeout(url, opts = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), timeoutMs);
+  const caller = opts.signal;
+  const onCallerAbort = () => controller.abort();
+  if (caller) {
+    if (caller.aborted) controller.abort();
+    else caller.addEventListener('abort', onCallerAbort);
+  }
   try {
-    return await fetch(url, { ...opts, signal: controller.signal });
+    const { signal: _ignored, ...rest } = opts;
+    return await fetch(url, { ...rest, signal: controller.signal });
   } finally {
     clearTimeout(t);
+    if (caller) caller.removeEventListener('abort', onCallerAbort);
   }
 }
 
@@ -87,10 +95,14 @@ export function useApiValue(path, { intervalMs = 5000, enabled = true } = {}) {
 
   useEffect(() => () => { isMountedRef.current = false; }, []);
 
-  const fetchOnce = useCallback(async () => {
+  const fetchOnce = useCallback(async (opts = {}) => {
     if (!path || !enabled) return;
-    // Cancel any pending previous fetch to avoid race conditions.
-    if (inFlightRef.current) inFlightRef.current.abort();
+    // Skip overlapping polls instead of aborting — aborting a slow Render
+    // request every 3s meant live/control never completed, so overrides looked dead.
+    if (inFlightRef.current) {
+      if (!opts.force) return;
+      inFlightRef.current.abort();
+    }
     const controller = new AbortController();
     inFlightRef.current = controller;
     try {
@@ -140,7 +152,7 @@ export function useApiValue(path, { intervalMs = 5000, enabled = true } = {}) {
     };
   }, [path, intervalMs, enabled, fetchOnce]);
 
-  return { ...state, refresh: fetchOnce };
+  return { ...state, refresh: () => fetchOnce({ force: true }) };
 }
 
 // -----------------------------------------------------------------------------

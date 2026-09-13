@@ -9,7 +9,8 @@
     "android:dev": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
-    "build:android:dev": "eas build --profile development --platform android"
+    "build:android:dev": "eas build --profile development --platform android",
+    "build:android:preview": "expo prebuild -p android && cd android && gradlew.bat assembleRelease"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",

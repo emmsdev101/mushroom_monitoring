@@ -11,7 +11,7 @@ export function BrandMark({ size = 34 }) {
     <Image
       source={LOGO}
       style={{ width: size, height: size, borderRadius: size / 2 }}
-      accessibilityLabel="Mushroom Nursery"
+      accessibilityLabel="Kabutech Monitoring"
     />
   );
 }
@@ -21,9 +21,12 @@ export function BrandLockup({ compact = false }) {
   return (
     <View style={styles.lockup}>
       <BrandMark size={compact ? 30 : 34} />
-      <Text style={[styles.brand, { color: t.text, fontSize: compact ? 17 : 18 }]}>
-        Mushroom<Text style={{ color: palette.forestGreen }}>Nursery</Text>
-      </Text>
+      <View>
+        <Text style={[styles.brand, { color: t.text, fontSize: compact ? 16 : 18 }]}>Kabutech</Text>
+        <Text style={[styles.brandSub, { color: palette.forestGreen, fontSize: compact ? 11 : 12 }]}>
+          Monitoring
+        </Text>
+      </View>
     </View>
   );
 }
@@ -129,6 +132,7 @@ export function PrimaryButton({ label, onPress, disabled, loadingLabel, icon }) 
 const styles = StyleSheet.create({
   lockup: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   brand: { fontWeight: '800', letterSpacing: -0.4 },
+  brandSub: { fontWeight: '700', letterSpacing: 0.4, marginTop: 1 },
   header: {
     paddingHorizontal: 20,
     paddingBottom: 10,

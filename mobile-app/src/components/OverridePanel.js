@@ -64,8 +64,9 @@ export default function OverridePanel({ deviceId, control, live, onSaved, compac
       if (!deviceId) return;
       setPending((prev) => ({ ...prev, ...patch }));
       try {
-        await apiPut(devicePath(deviceId, 'control'), patch);
-        onSaved?.();
+        await apiPut(devicePath(deviceId, 'control'), patch, { timeoutMs: 12000 });
+        await onSaved?.();
+        setPending({});
       } catch (e) {
         setPending((prev) => {
           const next = { ...prev };
@@ -101,7 +102,13 @@ export default function OverridePanel({ deviceId, control, live, onSaved, compac
               </Text>
               {!compact && (
                 <Pressable
-                  onPress={() => persist({ [row.overrideKey]: !manual, [row.onKey]: !manual ? forcedOn : false })}
+                  onPress={() =>
+                    persist(
+                      manual
+                        ? { [row.overrideKey]: false, [row.onKey]: false }
+                        : { [row.overrideKey]: true, [row.onKey]: liveOn }
+                    )
+                  }
                   style={styles.overrideRow}
                 >
                   <Text style={[styles.overrideLabel, { color: t.sub }]}>Override</Text>
@@ -120,7 +127,6 @@ export default function OverridePanel({ deviceId, control, live, onSaved, compac
             </View>
             <Switch
               value={shownOn}
-              disabled={!manual}
               onValueChange={(v) => persist({ [row.overrideKey]: true, [row.onKey]: v })}
               trackColor={{ false: t.isDark ? '#3A4440' : '#D5DDD8', true: palette.mintStrong }}
               thumbColor={shownOn ? palette.forestGreen : '#f4f4f4'}

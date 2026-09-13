@@ -2,7 +2,7 @@
   "name": "mushroom-nursery-server",
   "version": "1.0.0",
   "private": true,
-  "description": "Receives ESP32 telemetry and serves control settings for Mushroom Nursery",
+  "description": "Receives ESP32 telemetry and serves control settings for Kabutech Monitoring",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",

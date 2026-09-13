@@ -57,7 +57,8 @@ export default function LoginScreen({ session }) {
         <View style={styles.heroCopy}>
           <BrandMark size={72} />
           <Text style={styles.brand}>
-            Mushroom<Text style={{ color: '#B7E4C7' }}>Nursery</Text>
+            Kabutech{'\n'}
+            <Text style={{ color: '#B7E4C7' }}>Monitoring</Text>
           </Text>
           <Text style={styles.tagline}>Healthy Environment.{'\n'}Better Harvests.</Text>
         </View>
@@ -110,7 +111,7 @@ const styles = StyleSheet.create({
   bg: { flex: 1 },
   inner: { flex: 1, justifyContent: 'space-between', paddingHorizontal: 24 },
   heroCopy: { alignItems: 'center', gap: 12, marginTop: 24 },
-  brand: { color: 'white', fontSize: 32, fontWeight: '800', letterSpacing: -0.8 },
+  brand: { color: 'white', fontSize: 32, fontWeight: '800', letterSpacing: -0.8, textAlign: 'center', lineHeight: 38 },
   tagline: {
     color: 'rgba(255,255,255,0.88)',
     fontSize: 18,

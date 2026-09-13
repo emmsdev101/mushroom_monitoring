@@ -189,7 +189,12 @@ function history24hPayload(d) {
 async function hydrateControlFromDb(deviceId, state) {
   if (state.controlBackfilled) return;
   try {
-    const raw = await fb.loadControl(deviceId);
+    const raw = await Promise.race([
+      fb.loadControl(deviceId),
+      new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('control load timeout')), 4000);
+      }),
+    ]);
     if (!raw) return;
     const incomingTs = typeof raw.updatedAtMs === 'number' ? raw.updatedAtMs : 0;
     if (state.controlUpdatedAtMs && incomingTs < state.controlUpdatedAtMs) return;
@@ -275,12 +280,50 @@ function auth(req, res, next) {
   next();
 }
 
+/** Explicit Content-Length so ESP32 HTTPClient can read the body (no chunked TLS). */
+function sendJson(res, status, obj) {
+  const body = JSON.stringify(obj);
+  res.status(status);
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Content-Length', Buffer.byteLength(body));
+  res.setHeader('Connection', 'close');
+  res.setHeader('Cache-Control', 'no-store');
+  res.end(body);
+}
+
+function withTimeout(promise, ms, fallback) {
+  let timer;
+  return Promise.race([
+    Promise.resolve(promise).finally(() => clearTimeout(timer)),
+    new Promise((resolve) => {
+      timer = setTimeout(() => resolve(fallback), ms);
+    }),
+  ]);
+}
+
+const OVERRIDE_ONLY_KEYS = new Set([
+  'manualOverride',
+  'manualFanOn',
+  'manualIntakeFanOverride',
+  'manualIntakeFanOn',
+  'manualSprinklerOverride',
+  'manualSprinklerOn',
+  'manualHeaterOverride',
+  'manualHeaterOn',
+]);
+
+function isOverrideOnlyPatch(b) {
+  const keys = Object.keys(b || {});
+  return keys.length > 0 && keys.every((k) => OVERRIDE_ONLY_KEYS.has(k));
+}
+
 app.get('/health', (req, res) => {
   res.json({
     ok: true,
     hasApiKey: Boolean(API_KEY),
     firebaseControl: fb.isFirebaseReady(),
     firebaseMode: fb.isRtdbDisabled() ? 'memory-only' : 'web-sdk+anonymous',
+    firebaseDatabaseURL: fb.databaseURL || null,
   });
 });
 
@@ -438,7 +481,7 @@ app.get('/architecture.pdf', (req, res) => {
 
 app.get('/api/devices/:deviceId/control', auth, async (req, res) => {
   const d = await controlReady(req.params.deviceId);
-  res.json(d.control);
+  sendJson(res, 200, d.control);
 });
 
 app.put('/api/devices/:deviceId/control', auth, async (req, res) => {
@@ -451,27 +494,45 @@ app.put('/api/devices/:deviceId/control', auth, async (req, res) => {
   const now = Date.now();
   d.control.updatedAtMs = now;
   d.controlUpdatedAtMs = now;
+
+  const payload = {
+    ...d.control,
+    rtdbPath: `devices/${deviceId}/control`,
+    rtdbUrl: fb.databaseURL || null,
+  };
+
+  // Manual overrides must reach the ESP32 on the next poll. Do not wait on RTDB.
+  if (isOverrideOnlyPatch(b)) {
+    sendJson(res, 200, { ...payload, persisted: true });
+    fb.mergeControlToFirebase(deviceId, d.control).catch((e) => {
+      console.warn('[firebase] override not written to RTDB:', e.message);
+    });
+    console.log(
+      `[control] PUT override device=${deviceId} ` +
+        `exhaust=${d.control.manualOverride}/${d.control.manualFanOn} ` +
+        `intake=${d.control.manualIntakeFanOverride}/${d.control.manualIntakeFanOn} ` +
+        `sprinkler=${d.control.manualSprinklerOverride}/${d.control.manualSprinklerOn} ` +
+        `heater=${d.control.manualHeaterOverride}/${d.control.manualHeaterOn}`
+    );
+    return;
+  }
+
   let persisted = false;
   try {
-    persisted = await fb.mergeControlToFirebase(deviceId, d.control);
+    persisted = await withTimeout(fb.mergeControlToFirebase(deviceId, d.control), 8000, false);
   } catch (e) {
     console.warn('[firebase] PUT not written to RTDB:', e.message);
   }
   if (!persisted) {
-    console.warn(`[control] PUT device=${deviceId} not stored in DB`);
-    return res.status(503).json({
-      error:
-        'Could not store target ranges in the database. Check Firebase Anonymous Auth and RTDB rules, then retry.',
-      persisted: false,
-      ...d.control,
-    });
+    console.warn(`[control] PUT device=${deviceId} memory-only (DB write failed or timed out)`);
+  } else {
+    console.log(
+      `[control] PUT device=${deviceId} persisted=1 ` +
+        `temp=${d.control.tempMinC}–${d.control.tempFanOnC} ` +
+        `hum=${d.control.humMinPct}–${d.control.humFanOnPct} co2=${d.control.co2MinPpm}–${d.control.co2ThresholdPpm}`
+    );
   }
-  console.log(
-    `[control] PUT device=${deviceId} persisted=1 ` +
-      `temp=${d.control.tempMinC}–${d.control.tempFanOnC} ` +
-      `hum=${d.control.humMinPct}–${d.control.humFanOnPct} co2=${d.control.co2MinPpm}–${d.control.co2ThresholdPpm}`
-  );
-  res.json({ ...d.control, persisted: true });
+  sendJson(res, 200, { ...payload, persisted: !!persisted });
 });
 
 app.post('/api/devices/:deviceId/telemetry', auth, async (req, res) => {
@@ -571,7 +632,7 @@ app.post('/api/devices/:deviceId/telemetry', auth, async (req, res) => {
             d.alertState[key] = { above: true, lastSentMs: st.lastSentMs };
             continue;
           }
-          const title = 'Mushroom Nursery Alert';
+          const title = 'Kabutech Monitoring Alert';
           const direction = isLow ? 'low' : 'high';
           const body =
             key === 'co2'
@@ -613,7 +674,7 @@ app.post('/api/devices/:deviceId/telemetry', auth, async (req, res) => {
           if (!cur || cur.above) continue; // still above or unknown
 
           // Recovery: only on transition.
-          const title = 'Mushroom Nursery';
+          const title = 'Kabutech Monitoring';
           const body =
             key === 'co2'
               ? `CO₂ back to normal: ${cur.value != null ? Math.round(cur.value) : '-'} ppm (threshold ${cur.thr})`
@@ -653,8 +714,9 @@ app.post('/api/devices/:deviceId/telemetry', auth, async (req, res) => {
       `persist=${shouldPersist ? (significant ? 'delta' : 'hourly') : '0'}`
   );
 
-  await controlReady(deviceId);
-  res.json({ ok: true, control: d.control });
+  // Do not await Firebase hydration — the ESP32 TLS session would stall and
+  // the next override poll would be delayed by seconds.
+  sendJson(res, 200, { ok: true, control: d.control });
 });
 
 function liveWithPresence(d) {

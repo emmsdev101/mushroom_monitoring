@@ -240,13 +240,16 @@ export default function SettingsScreen({ deviceIdState, onSignOut }) {
         manualSprinklerOn: false,
         manualHeaterOverride: false,
         manualHeaterOn: false,
-      });
+      }, { timeoutMs: 30000 });
       await refreshControl?.();
-      const tmax = typeof saved?.tempFanOnC === 'number' ? saved.tempFanOnC : '—';
-      Alert.alert(
-        'Saved',
-        `Target ranges stored in the database. Temp max is ${tmax} °C. Confirm devices/${nextDeviceId}/control/tempFanOnC in Firebase.`
-      );
+      if (saved?.persisted !== true) {
+        Alert.alert(
+          'Not saved to database',
+          saved?.error || 'The server did not confirm a Firebase write. Check Render logs and RTDB rules.'
+        );
+        return;
+      }
+      Alert.alert('Target ranges saved', `The nursery will use temp ${saved.tempMinC}–${saved.tempFanOnC} °C.`);
     } catch (e) {
       Alert.alert('Save failed', String(e?.message || e));
     } finally {
@@ -261,7 +264,7 @@ export default function SettingsScreen({ deviceIdState, onSignOut }) {
     setSavingServer(true);
     try {
       await serverConfig.update({ baseUrl: url, apiKey: pendingApiKey });
-      Alert.alert('Saved', 'Server configuration updated.');
+      Alert.alert('Connection saved', 'This phone will use the new API address. Target ranges were not changed.');
       refreshControl?.();
     } catch (e) {
       Alert.alert('Save failed', String(e?.message || e));
@@ -286,7 +289,10 @@ export default function SettingsScreen({ deviceIdState, onSignOut }) {
           contentContainerStyle={[styles.container, { paddingBottom: 36 + insets.bottom }]}
           showsVerticalScrollIndicator={false}
         >
-          <Text style={[styles.section, { color: t.text }]}>Target Ranges</Text>
+          <Text style={[styles.section, { color: t.text }]}>1. Target ranges</Text>
+          <Text style={[styles.hint, { color: t.sub }]}>
+            Min and max for the grow room. This is what the fans, mister, and heater follow. Use the green button below — not Save connection.
+          </Text>
           <View style={[styles.card, { backgroundColor: t.surface }, cardShadow(t.isDark)]}>
             <InfoRow icon="cloud-outline" label="CO₂" value={`${co2MinPpm || DEFAULTS.co2Min} – ${co2Threshold || DEFAULTS.co2Max} ppm`} t={t} />
             <View style={styles.row}>
@@ -309,58 +315,9 @@ export default function SettingsScreen({ deviceIdState, onSignOut }) {
             </View>
           </View>
 
-          <Text style={[styles.section, { color: t.text }]}>System</Text>
           <View style={[styles.card, { backgroundColor: t.surface }, cardShadow(t.isDark)]}>
-            <InfoRow icon="hardware-chip-outline" label="Device Name" value={pendingDeviceId || '—'} t={t} />
-            <TextInput
-              value={pendingDeviceId}
-              onChangeText={setPendingDeviceId}
-              autoCapitalize="none"
-              autoCorrect={false}
-              placeholder="nursery-01"
-              placeholderTextColor={t.placeholder}
-              style={[styles.input, { color: t.text, borderColor: t.border, backgroundColor: t.bg }]}
-            />
-            <InfoRow icon="wifi-outline" label="Connection" value={derived.online ? 'Connected' : 'Offline'} t={t} />
-            <InfoRow icon="code-slash-outline" label="Firmware Version" value="v1.0.0" t={t} />
-            <Text style={[styles.help, { color: t.sub, marginTop: 8 }]}>Server URL</Text>
-            <TextInput
-              value={pendingServerUrl}
-              onChangeText={setPendingServerUrl}
-              autoCapitalize="none"
-              autoCorrect={false}
-              placeholder={DEFAULT_SERVER_BASE_URL}
-              placeholderTextColor={t.placeholder}
-              style={[styles.input, { color: t.text, borderColor: t.border, backgroundColor: t.bg }]}
-            />
-            <Text style={[styles.help, { color: t.sub, marginTop: 8 }]}>API key (optional)</Text>
-            <TextInput
-              value={pendingApiKey}
-              onChangeText={setPendingApiKey}
-              autoCapitalize="none"
-              autoCorrect={false}
-              placeholder="••••"
-              placeholderTextColor={t.placeholder}
-              style={[styles.input, { color: t.text, borderColor: t.border, backgroundColor: t.bg }]}
-            />
-            <Pressable onPress={saveServerConfig} style={[styles.saveBtn, { marginTop: 12, opacity: savingServer ? 0.7 : 1 }]}>
-              <Text style={styles.saveBtnText}>{savingServer ? 'Saving…' : 'Save server'}</Text>
-            </Pressable>
-          </View>
-
-          <Text style={[styles.section, { color: t.text }]}>Notifications</Text>
-          <View style={[styles.card, { backgroundColor: t.surface }, cardShadow(t.isDark)]}>
-            <InfoRow
-              icon="notifications-outline"
-              label="Alerts & Notifications"
-              value="Open"
-              t={t}
-              onPress={() => navigateRoot(navigation, 'Alerts')}
-            />
-          </View>
-
-          <Text style={[styles.section, { color: t.text }]}>Devices</Text>
-          <View style={[styles.card, { backgroundColor: t.surface }, cardShadow(t.isDark)]}>
+            <Text style={[styles.label, { color: t.text }]}>Mister & heater timing</Text>
+            <Text style={[styles.hint, { color: t.sub, marginTop: 0 }]}>Saved together with the ranges above.</Text>
             <View style={styles.switchRow}>
               <Text style={[styles.label, { color: t.text }]}>Intake fan enabled</Text>
               <Switch
@@ -421,10 +378,67 @@ export default function SettingsScreen({ deviceIdState, onSignOut }) {
             disabled={!canSave || saving}
             style={[styles.saveBtn, { opacity: !canSave || saving ? 0.5 : 1 }]}
           >
-            <Text style={styles.saveBtnText}>{saving ? 'Saving…' : 'Save ranges'}</Text>
+            <Text style={styles.saveBtnText}>{saving ? 'Saving ranges…' : 'Save target ranges'}</Text>
           </Pressable>
 
-          <Text style={[styles.section, { color: t.text }]}>Admin account</Text>
+          <Text style={[styles.section, { color: t.text }]}>Notifications</Text>
+          <View style={[styles.card, { backgroundColor: t.surface }, cardShadow(t.isDark)]}>
+            <InfoRow
+              icon="notifications-outline"
+              label="Alerts & Notifications"
+              value="Open"
+              t={t}
+              onPress={() => navigateRoot(navigation, 'Alerts')}
+            />
+          </View>
+
+          <Text style={[styles.section, { color: t.text }]}>2. Phone connection</Text>
+          <Text style={[styles.hint, { color: t.sub }]}>
+            Only for this phone: which nursery it talks to. This does not change temperature, humidity, or CO₂ targets.
+          </Text>
+          <View style={[styles.card, { backgroundColor: t.surface }, cardShadow(t.isDark)]}>
+            <InfoRow icon="hardware-chip-outline" label="Device ID" value={pendingDeviceId || '—'} t={t} />
+            <TextInput
+              value={pendingDeviceId}
+              onChangeText={setPendingDeviceId}
+              autoCapitalize="none"
+              autoCorrect={false}
+              placeholder="nursery-01"
+              placeholderTextColor={t.placeholder}
+              style={[styles.input, { color: t.text, borderColor: t.border, backgroundColor: t.bg }]}
+            />
+            <InfoRow icon="wifi-outline" label="Device status" value={derived.online ? 'Online' : 'Offline'} t={t} />
+            <Text style={[styles.help, { color: t.sub, marginTop: 8 }]}>API address</Text>
+            <TextInput
+              value={pendingServerUrl}
+              onChangeText={setPendingServerUrl}
+              autoCapitalize="none"
+              autoCorrect={false}
+              placeholder={DEFAULT_SERVER_BASE_URL}
+              placeholderTextColor={t.placeholder}
+              style={[styles.input, { color: t.text, borderColor: t.border, backgroundColor: t.bg }]}
+            />
+            <Text style={[styles.help, { color: t.sub, marginTop: 8 }]}>API key (optional)</Text>
+            <TextInput
+              value={pendingApiKey}
+              onChangeText={setPendingApiKey}
+              autoCapitalize="none"
+              autoCorrect={false}
+              placeholder="••••"
+              placeholderTextColor={t.placeholder}
+              style={[styles.input, { color: t.text, borderColor: t.border, backgroundColor: t.bg }]}
+            />
+            <Pressable
+              onPress={saveServerConfig}
+              style={[styles.secondaryBtn, { borderColor: t.border, opacity: savingServer ? 0.7 : 1 }]}
+            >
+              <Text style={[styles.secondaryBtnText, { color: t.text }]}>
+                {savingServer ? 'Saving…' : 'Save connection'}
+              </Text>
+            </Pressable>
+          </View>
+
+          <Text style={[styles.section, { color: t.text }]}>3. Admin account</Text>
           <View style={[styles.card, { backgroundColor: t.surface }, cardShadow(t.isDark)]}>
             <Text style={[styles.help, { color: t.sub }]}>Username</Text>
             <TextInput value={adminUser} onChangeText={setAdminUser} autoCapitalize="none" style={[styles.input, { color: t.text, borderColor: t.border, backgroundColor: t.bg }]} />
@@ -448,7 +462,7 @@ export default function SettingsScreen({ deviceIdState, onSignOut }) {
               }}
               style={[styles.saveBtn, { marginTop: 12, opacity: changingCreds ? 0.7 : 1 }]}
             >
-              <Text style={styles.saveBtnText}>{changingCreds ? 'Saving…' : 'Save credentials'}</Text>
+              <Text style={styles.saveBtnText}>{changingCreds ? 'Saving…' : 'Save login'}</Text>
             </Pressable>
             <Pressable onPress={onSignOut} style={[styles.saveBtn, { marginTop: 10, backgroundColor: '#C45C4A' }]}>
               <Text style={styles.saveBtnText}>Sign out</Text>
@@ -463,6 +477,7 @@ export default function SettingsScreen({ deviceIdState, onSignOut }) {
 const styles = StyleSheet.create({
   container: { paddingHorizontal: 20, gap: 12 },
   section: { fontSize: 18, fontWeight: '800', marginTop: 8 },
+  hint: { fontSize: 13, fontWeight: '600', lineHeight: 18, marginTop: -4 },
   card: { borderRadius: 20, padding: 14, gap: 8 },
   label: { fontSize: 14, fontWeight: '700' },
   help: { fontSize: 12, fontWeight: '700' },
@@ -473,7 +488,16 @@ const styles = StyleSheet.create({
   infoLabel: { flex: 1, fontSize: 14, fontWeight: '700' },
   infoValue: { fontSize: 13, fontWeight: '800', maxWidth: 160 },
   switchRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  saveBtn: { backgroundColor: palette.forestGreen, borderRadius: 14, paddingVertical: 12, alignItems: 'center' },
-  saveBtnText: { color: 'white', fontWeight: '800' },
+  saveBtn: { backgroundColor: palette.forestGreen, borderRadius: 14, paddingVertical: 14, alignItems: 'center' },
+  saveBtnText: { color: 'white', fontWeight: '800', fontSize: 16 },
+  secondaryBtn: {
+    marginTop: 12,
+    borderWidth: 1.5,
+    borderRadius: 14,
+    paddingVertical: 12,
+    alignItems: 'center',
+    backgroundColor: 'transparent',
+  },
+  secondaryBtnText: { fontWeight: '800' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
 });

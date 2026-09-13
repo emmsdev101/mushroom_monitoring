@@ -1,11 +1,10 @@
 /**
- * IMPROVED ESP32 Cloud Connectivity for Render/HTTPS
- * * Major Fixes applied:
- * 1. Persistent WiFiClientSecure: Reusing the client prevents the high overhead of 
- * re-negotiating SSL handshakes on every single request.
- * 2. Handshake Timeout: Increased timeouts to account for Render's cold starts.
- * 3. Memory Management: Added client.stop() logic to prevent socket leakage.
- * 4. Header Optimization: Simplified headers to ensure they fit standard buffers.
+ * ESP32 nursery node: sensors + relays, HTTPS to the Render API.
+ *
+ * HTTPS notes (Render / Express):
+ * - HTTP/1.0 so the server sends Content-Length instead of chunked bodies.
+ * - Reuse WiFiClientSecure across requests; only reset after a transport error.
+ * - Smaller TLS buffers to avoid heap allocation failures on long-running nodes.
  */
 // 
 #if !defined(ARDUINO_ARCH_ESP32)
@@ -58,19 +57,19 @@
 #define INTAKE_FAN_PIN -1
 #endif
 #ifndef INTAKE_RELAY_ACTIVE_HIGH
-#define INTAKE_RELAY_ACTIVE_HIGH 1
+#define INTAKE_RELAY_ACTIVE_HIGH 0
 #endif
 #ifndef SPRINKLER_PIN
 #define SPRINKLER_PIN -1
 #endif
 #ifndef SPRINKLER_RELAY_ACTIVE_HIGH
-#define SPRINKLER_RELAY_ACTIVE_HIGH 1
+#define SPRINKLER_RELAY_ACTIVE_HIGH 0
 #endif
 #ifndef HEATER_PIN
 #define HEATER_PIN -1
 #endif
 #ifndef HEATER_RELAY_ACTIVE_HIGH
-#define HEATER_RELAY_ACTIVE_HIGH 1
+#define HEATER_RELAY_ACTIVE_HIGH 0
 #endif
 
 #ifndef WIFI_RESET_PIN
@@ -107,11 +106,13 @@ static SensirionI2cScd4x scd4x;
 static WiFiManager wifiManager;
 
 static const uint32_t PUBLISH_INTERVAL_MS = 5000;
-static const uint32_t STEP_PAUSE_MS = 200;
-static const uint32_t CONTROL_HTTP_TIMEOUT_MS = 20000;
-static const uint32_t TELEMETRY_HTTP_TIMEOUT_MS = 20000;
-static const uint8_t TELEMETRY_RETRIES = 3;
-static const uint32_t TELEMETRY_RETRY_DELAY_MS = 2000;
+static const uint32_t CONTROL_HTTP_TIMEOUT_MS = 8000;
+static const uint32_t TELEMETRY_HTTP_TIMEOUT_MS = 10000;
+static const uint8_t TELEMETRY_RETRIES = 2;
+static const uint32_t TELEMETRY_RETRY_DELAY_MS = 400;
+static String cachedServerBaseUrl;
+static bool serverUrlCached = false;
+static bool sslNeedsReset = true;
 static int lastCo2ppm = -1;
 static float lastTempC = NAN;
 static float lastHumPct = NAN;
@@ -191,6 +192,8 @@ static void saveServerBaseUrlToNvs(const String &url) {
   pref.begin(kPrefNs, false);
   pref.putString(kPrefServerUrl, u);
   pref.end();
+  cachedServerBaseUrl = u;
+  serverUrlCached = true;
 }
 
 static void syncServerUrlFieldForPortal() {
@@ -207,7 +210,11 @@ static void persistServerUrlAfterPortal() {
 }
 
 static String serverBaseUrl() {
-  return loadServerBaseUrlFromNvs();
+  if (!serverUrlCached) {
+    cachedServerBaseUrl = loadServerBaseUrlFromNvs();
+    serverUrlCached = true;
+  }
+  return cachedServerBaseUrl;
 }
 
 static void addApiKeyHeader(HTTPClient &http) {
@@ -275,10 +282,10 @@ static void wifiUseStationOnly() {
 
 static void resetSecureClient() {
   secureClient.stop();
-  delay(30);
+  delay(20);
+  // ESP32 Arduino 3.x (NetworkClientSecure) has no setBufferSizes().
   secureClient.setInsecure();
-  secureClient.setHandshakeTimeout(30);
-  secureClient.setTimeout(TELEMETRY_HTTP_TIMEOUT_MS);
+  secureClient.setHandshakeTimeout(12);
 }
 
 static void httpBeginSmart(HTTPClient &http, const String &url, uint32_t timeoutMs = TELEMETRY_HTTP_TIMEOUT_MS) {
@@ -286,16 +293,26 @@ static void httpBeginSmart(HTTPClient &http, const String &url, uint32_t timeout
     uint16_t port = 0;
     bool https = false;
     if (parseHttpUrl(url, host, port, path, https) && https) {
-        resetSecureClient();
+        if (sslNeedsReset || !secureClient.connected()) {
+            resetSecureClient();
+            sslNeedsReset = false;
+        }
+        secureClient.setInsecure();
         http.begin(secureClient, host, port, path, true);
     } else {
         http.begin(url);
     }
 
-    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+    // HTTP/1.0 → Content-Length instead of Transfer-Encoding: chunked.
+    // ESP32 HTTPClient frequently fails to read chunked HTTPS bodies from
+    // Render/Express, which looks like a telemetry POST failure and also
+    // drops the piggybacked control JSON (overrides never apply).
+    http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
     http.setTimeout(timeoutMs);
-    http.useHTTP10(false);
+    http.useHTTP10(true);
     http.setReuse(false);
+    http.addHeader("Accept", "application/json");
+    http.addHeader("Accept-Encoding", "identity");
 }
 
 static void logServerHttp(const char *method, const String &url, int httpCode, const String &detail = String()) {
@@ -579,10 +596,10 @@ static void applyOverrideActuators() {
 }
 
 static bool applyControlPayload(const String &payload) {
-  StaticJsonDocument<2048> doc;
+  StaticJsonDocument<4096> doc;
   const DeserializationError err = deserializeJson(doc, payload);
   if (err) {
-    Serial.printf("control parse failed: %s len=%u\n", err.c_str(), (unsigned)payload.length());
+    Serial.printf("control parse failed: %s len=%u heap=%u\n", err.c_str(), (unsigned)payload.length(), (unsigned)ESP.getFreeHeap());
     return false;
   }
 
@@ -647,7 +664,7 @@ static bool readControlFromServer() {
     }
   } else {
     logServerHttp("GET", url, code, http.errorToString(code));
-    if (code < 0) secureClient.stop();
+    if (code < 0) sslNeedsReset = true;
   }
   http.end();
   return ok;
@@ -708,8 +725,9 @@ static void postTelemetryToServer(float tempC, float humPct, int co2ppm) {
 
       if (code < 0) {
         logServerHttp("POST", url, code, http.errorToString(code));
+        Serial.printf("telemetry fail heap=%u\n", (unsigned)ESP.getFreeHeap());
         http.end();
-        resetSecureClient();
+        sslNeedsReset = true;
         if (attempt < TELEMETRY_RETRIES) {
           Serial.printf("telemetry retry %u/%u\n", (unsigned)(attempt + 1), (unsigned)TELEMETRY_RETRIES);
           delay(TELEMETRY_RETRY_DELAY_MS);
@@ -721,7 +739,7 @@ static void postTelemetryToServer(float tempC, float humPct, int co2ppm) {
       if (code != HTTP_CODE_OK && code != 201) {
         logServerHttp("POST", url, code, "telemetry rejected");
         http.end();
-        resetSecureClient();
+        sslNeedsReset = true;
         break;
       }
 
@@ -729,29 +747,31 @@ static void postTelemetryToServer(float tempC, float humPct, int co2ppm) {
       appliedControl = applyControlPayload(payload);
       logServerHttp("POST", url, code, appliedControl ? "ok + control" : "ok");
       if (!appliedControl) {
-        Serial.printf("POST body len=%u\n", (unsigned)payload.length());
+        Serial.printf("POST body len=%u heap=%u\n", (unsigned)payload.length(), (unsigned)ESP.getFreeHeap());
       }
       http.end();
       break;
     }
-
-    if ((code == HTTP_CODE_OK || code == 201) && !appliedControl) {
-      readControlFromServer();
-    }
 }
 
 void setup() {
+  // Drive the idle level before pinMode so an active-LOW module does not
+  // latch on while the pin is still floating.
+  digitalWrite(RELAY_PIN, RELAY_ACTIVE_HIGH ? LOW : HIGH);
   pinMode(RELAY_PIN, OUTPUT);
   setRelay(false);
 #if INTAKE_FAN_PIN >= 0
+  digitalWrite(INTAKE_FAN_PIN, INTAKE_RELAY_ACTIVE_HIGH ? LOW : HIGH);
   pinMode(INTAKE_FAN_PIN, OUTPUT);
   setIntakeRelay(false);
 #endif
 #if SPRINKLER_PIN >= 0
+  digitalWrite(SPRINKLER_PIN, SPRINKLER_RELAY_ACTIVE_HIGH ? LOW : HIGH);
   pinMode(SPRINKLER_PIN, OUTPUT);
   setSprinklerRelay(false);
 #endif
 #if HEATER_PIN >= 0
+  digitalWrite(HEATER_PIN, HEATER_RELAY_ACTIVE_HIGH ? LOW : HIGH);
   pinMode(HEATER_PIN, OUTPUT);
   setHeaterRelay(false);
 #endif
@@ -780,8 +800,8 @@ void setup() {
 }
 
 void loop() {
+  const uint32_t cycleStart = millis();
   wifiEnsureConnected();
-  delay(STEP_PAUSE_MS);
 
   // 1. Read sensors.
   lastHumPct = dht.readHumidity();
@@ -789,16 +809,19 @@ void loop() {
   scd41Ensure(millis());
   scd41ReadCo2ppm(lastCo2ppm);
   Serial.printf("1 sensors T=%.1f H=%.0f CO2=%d\n", lastTempC, lastHumPct, lastCo2ppm);
-  delay(STEP_PAUSE_MS);
 
-  // 2. Auto thresholds only — skip any channel that is in override.
+  // 2. Pull overrides/thresholds first so relays move even if telemetry POST fails.
+  if (WiFi.status() == WL_CONNECTED) {
+    readControlFromServer();
+  }
+
+  // 3. Auto thresholds only — skip any channel that is in override.
   applyAutoActuators(lastTempC, lastHumPct, lastCo2ppm);
   Serial.printf(
-      "2 auto exhaust=%d intake=%d sprinkler=%d heater=%d Tmax=%.1f ov=%d\n",
+      "3 auto exhaust=%d intake=%d sprinkler=%d heater=%d Tmax=%.1f ov=%d\n",
       fanOn, intakeFanOn, sprinklerOn, heaterOn, tempFanOnC, manualOverride);
-  delay(STEP_PAUSE_MS);
 
-  // 3. POST telemetry.  4. Apply override relays from the response.
+  // 4. POST telemetry. Apply control from the response if the GET missed it.
   if (WiFi.status() == WL_CONNECTED) {
     postTelemetryToServer(lastTempC, lastHumPct, lastCo2ppm);
   }
@@ -809,7 +832,8 @@ void loop() {
       manualSprinklerOverride, sprinklerOn,
       manualHeaterOverride, heaterOn);
 
-  // Always rest 5s after the four steps. Fitting the work *inside* 5s
-  // made HTTPS-heavy cycles post back-to-back with no gap.
-  delay(PUBLISH_INTERVAL_MS);
+  const uint32_t elapsed = millis() - cycleStart;
+  if (elapsed < PUBLISH_INTERVAL_MS) {
+    delay(PUBLISH_INTERVAL_MS - elapsed);
+  }
 }

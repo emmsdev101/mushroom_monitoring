@@ -23,15 +23,10 @@ function isPermissionDenied(err) {
 }
 
 function disableRtdb(reason) {
-  if (rtdbDisabled) return;
-  rtdbDisabled = true;
+  // Do not latch RTDB off. A denied live/history write used to block every
+  // later control save, so ranges never reached the database.
   rtdbDisableReason = reason || 'unavailable';
-  firebaseReady = false;
-  console.warn(
-    `[firebase] RTDB disabled (${rtdbDisableReason}). ` +
-      'API continues from in-memory state. Enable Anonymous Auth in Firebase Console, ' +
-      'or open RTDB rules, then restart the service to resume mirroring.'
-  );
+  console.warn(`[firebase] ${rtdbDisableReason} — will retry on the next write`);
 }
 
 function canUseRtdb() {
@@ -476,4 +471,5 @@ module.exports = {
   removePushTokenKey,
   isFirebaseReady,
   isRtdbDisabled: () => rtdbDisabled,
+  databaseURL: firebaseConfig.databaseURL,
 };

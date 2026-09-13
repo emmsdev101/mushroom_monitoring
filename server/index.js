@@ -592,7 +592,7 @@ app.post('/api/devices/:deviceId/telemetry', auth, (req, res) => {
       `persist=${shouldPersist ? (significant ? 'delta' : 'hourly') : '0'}`
   );
 
-  res.json({ ok: true });
+  res.json({ ok: true, control: d.control });
 });
 
 function liveWithPresence(d) {

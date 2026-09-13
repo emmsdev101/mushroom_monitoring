@@ -107,11 +107,9 @@ static SensirionI2cScd4x scd4x;
 static WiFiManager wifiManager;
 
 static const uint32_t PUBLISH_INTERVAL_MS = 5000;
-static const uint32_t CONTROL_POLL_MS = 1000;
 static const uint32_t CONTROL_HTTP_TIMEOUT_MS = 5000;
 static const uint32_t TELEMETRY_HTTP_TIMEOUT_MS = 30000;
 static uint32_t lastPublishMs = 0;
-static uint32_t lastControlFetchMs = 0;
 static int lastCo2ppm = -1;
 static float lastTempC = NAN;
 static float lastHumPct = NAN;
@@ -488,56 +486,64 @@ static void applyActuators(float temp, float hum, int co2ppm) {
 #endif
 }
 
+static bool applyControlPayload(const String &payload) {
+  StaticJsonDocument<1024> doc;
+  if (deserializeJson(doc, payload)) return false;
+
+  JsonVariantConst c = doc["control"];
+  const bool nested = c.is<JsonObject>();
+  if (!nested) c = doc;
+  if (!nested && !c["co2ThresholdPpm"].is<int>() && !c["manualOverride"].is<bool>()) {
+    return false;
+  }
+
+  if (c["co2ThresholdPpm"].is<int>()) co2ThresholdPpm = c["co2ThresholdPpm"];
+  if (!c["tempFanOnC"].isNull()) tempFanOnC = c["tempFanOnC"];
+  if (!c["humFanOnPct"].isNull()) humFanOnPct = c["humFanOnPct"];
+  if (c["manualOverride"].is<bool>()) manualOverride = c["manualOverride"];
+  if (c["manualFanOn"].is<bool>()) manualFanOn = c["manualFanOn"];
+  if (c["intakeFanEnabled"].is<bool>()) intakeFanEnabled = c["intakeFanEnabled"];
+  if (c["manualIntakeFanOverride"].is<bool>()) manualIntakeFanOverride = c["manualIntakeFanOverride"];
+  if (c["manualIntakeFanOn"].is<bool>()) manualIntakeFanOn = c["manualIntakeFanOn"];
+  if (c["sprinklerEnabled"].is<bool>()) sprinklerEnabled = c["sprinklerEnabled"];
+  if (!c["sprinklerOnHumPct"].isNull()) sprinklerOnHumPct = c["sprinklerOnHumPct"];
+  if (!c["sprinklerOffHumPct"].isNull()) sprinklerOffHumPct = c["sprinklerOffHumPct"];
+  if (c["sprinklerMaxOnSec"].is<int>()) sprinklerMaxOnSec = (uint32_t)(int)c["sprinklerMaxOnSec"];
+  if (c["sprinklerMinOffSec"].is<int>()) sprinklerMinOffSec = (uint32_t)(int)c["sprinklerMinOffSec"];
+  if (c["manualSprinklerOverride"].is<bool>()) manualSprinklerOverride = c["manualSprinklerOverride"];
+  if (c["manualSprinklerOn"].is<bool>()) manualSprinklerOn = c["manualSprinklerOn"];
+  if (!c["tempMinC"].isNull()) tempMinC = c["tempMinC"];
+  if (c["heaterEnabled"].is<bool>()) heaterEnabled = c["heaterEnabled"];
+  if (!c["heaterOnTempC"].isNull()) heaterOnTempC = c["heaterOnTempC"];
+  if (!c["heaterOffTempC"].isNull()) heaterOffTempC = c["heaterOffTempC"];
+  if (c["heaterMaxOnSec"].is<int>()) heaterMaxOnSec = (uint32_t)(int)c["heaterMaxOnSec"];
+  if (c["heaterMinOffSec"].is<int>()) heaterMinOffSec = (uint32_t)(int)c["heaterMinOffSec"];
+  if (c["manualHeaterOverride"].is<bool>()) manualHeaterOverride = c["manualHeaterOverride"];
+  if (c["manualHeaterOn"].is<bool>()) manualHeaterOn = c["manualHeaterOn"];
+  applyActuators(lastTempC, lastHumPct, lastCo2ppm);
+  return true;
+}
+
 static void readControlFromServer() {
   if (WiFi.status() != WL_CONNECTED) return;
-  
+
   HTTPClient http;
   const String url = serverBaseUrl() + "/api/devices/" + DEVICE_ID + "/control";
-  
+
   httpBeginSmart(http, url, CONTROL_HTTP_TIMEOUT_MS);
   addApiKeyHeader(http);
-  
+
   const int code = http.GET();
   if (code == HTTP_CODE_OK) {
     const String payload = http.getString();
-    // 1024 covers the full control payload including intake-fan and sprinkler
-    // fields. Response is ~350 bytes JSON + ArduinoJson key copies + slot
-    // overhead; leaves comfortable headroom.
-    StaticJsonDocument<1024> doc;
-    if (!deserializeJson(doc, payload)) {
+    if (applyControlPayload(payload)) {
       logServerHttp("GET", url, code, "ok");
-      if (doc["co2ThresholdPpm"].is<int>()) co2ThresholdPpm = doc["co2ThresholdPpm"];
-      if (!doc["tempFanOnC"].isNull()) tempFanOnC = doc["tempFanOnC"];
-      if (!doc["humFanOnPct"].isNull()) humFanOnPct = doc["humFanOnPct"];
-      if (doc["manualOverride"].is<bool>()) manualOverride = doc["manualOverride"];
-      if (doc["manualFanOn"].is<bool>()) manualFanOn = doc["manualFanOn"];
-      // Intake fan
-      if (doc["intakeFanEnabled"].is<bool>()) intakeFanEnabled = doc["intakeFanEnabled"];
-      if (doc["manualIntakeFanOverride"].is<bool>()) manualIntakeFanOverride = doc["manualIntakeFanOverride"];
-      if (doc["manualIntakeFanOn"].is<bool>()) manualIntakeFanOn = doc["manualIntakeFanOn"];
-      // Sprinkler
-      if (doc["sprinklerEnabled"].is<bool>()) sprinklerEnabled = doc["sprinklerEnabled"];
-      if (!doc["sprinklerOnHumPct"].isNull()) sprinklerOnHumPct = doc["sprinklerOnHumPct"];
-      if (!doc["sprinklerOffHumPct"].isNull()) sprinklerOffHumPct = doc["sprinklerOffHumPct"];
-      if (doc["sprinklerMaxOnSec"].is<int>()) sprinklerMaxOnSec = (uint32_t)(int)doc["sprinklerMaxOnSec"];
-      if (doc["sprinklerMinOffSec"].is<int>()) sprinklerMinOffSec = (uint32_t)(int)doc["sprinklerMinOffSec"];
-      if (doc["manualSprinklerOverride"].is<bool>()) manualSprinklerOverride = doc["manualSprinklerOverride"];
-      if (doc["manualSprinklerOn"].is<bool>()) manualSprinklerOn = doc["manualSprinklerOn"];
-      // Lower alert bound — used for cold-inhibit gating.
-      if (!doc["tempMinC"].isNull()) tempMinC = doc["tempMinC"];
-      // Heater
-      if (doc["heaterEnabled"].is<bool>()) heaterEnabled = doc["heaterEnabled"];
-      if (!doc["heaterOnTempC"].isNull()) heaterOnTempC = doc["heaterOnTempC"];
-      if (!doc["heaterOffTempC"].isNull()) heaterOffTempC = doc["heaterOffTempC"];
-      if (doc["heaterMaxOnSec"].is<int>()) heaterMaxOnSec = (uint32_t)(int)doc["heaterMaxOnSec"];
-      if (doc["heaterMinOffSec"].is<int>()) heaterMinOffSec = (uint32_t)(int)doc["heaterMinOffSec"];
-      if (doc["manualHeaterOverride"].is<bool>()) manualHeaterOverride = doc["manualHeaterOverride"];
-      if (doc["manualHeaterOn"].is<bool>()) manualHeaterOn = doc["manualHeaterOn"];
-      applyActuators(lastTempC, lastHumPct, lastCo2ppm);
+    } else {
+      logServerHttp("GET", url, code, "control parse failed");
     }
   } else {
     logServerHttp("GET", url, code, http.errorToString(code));
-    if (code < 0) secureClient.stop(); // Clear stale SSL if connection failed
+    if (code < 0) secureClient.stop();
   }
   http.end();
 }
@@ -571,16 +577,24 @@ static void postTelemetryToServer(float tempC, float humPct, int co2ppm) {
     addApiKeyHeader(http);
 
     const int code = http.POST(body);
+    bool appliedControl = false;
 
     if (code < 0) {
         logServerHttp("POST", url, code, http.errorToString(code));
-        secureClient.stop(); // Force reset SSL session on error
+        secureClient.stop();
     } else if (code != HTTP_CODE_OK && code != 201) {
         logServerHttp("POST", url, code, "telemetry rejected");
     } else {
-        logServerHttp("POST", url, code, "ok");
+        const String payload = http.getString();
+        appliedControl = applyControlPayload(payload);
+        logServerHttp("POST", url, code, appliedControl ? "ok + control" : "ok");
     }
     http.end();
+
+    // Old server returns { ok: true } with no control — fetch it separately.
+    if ((code == HTTP_CODE_OK || code == 201) && !appliedControl) {
+      readControlFromServer();
+    }
 }
 
 void setup() {
@@ -618,7 +632,6 @@ void setup() {
 
   if (WiFi.status() == WL_CONNECTED) {
     readControlFromServer();
-    lastControlFetchMs = millis();
   }
 }
 
@@ -626,11 +639,6 @@ void loop() {
   wifiEnsureConnected();
 
   const uint32_t now = millis();
-  
-  if (WiFi.status() == WL_CONNECTED && (now - lastControlFetchMs >= CONTROL_POLL_MS)) {
-    lastControlFetchMs = now;
-    readControlFromServer();
-  }
 
   if (now - lastPublishMs >= PUBLISH_INTERVAL_MS || lastPublishMs == 0) {
     lastPublishMs = now;

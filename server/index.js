@@ -186,10 +186,40 @@ function history24hPayload(d) {
   return out;
 }
 
+async function hydrateControlFromDb(deviceId, state) {
+  if (state.controlBackfilled) return;
+  try {
+    const raw = await fb.loadControl(deviceId);
+    if (!raw) return;
+    const incomingTs = typeof raw.updatedAtMs === 'number' ? raw.updatedAtMs : 0;
+    if (state.controlUpdatedAtMs && incomingTs < state.controlUpdatedAtMs) return;
+    fb.applyControlSnapshot(state.control, raw);
+    if (incomingTs) state.controlUpdatedAtMs = incomingTs;
+    console.log(
+      `[control] loaded from DB device=${deviceId} temp=${state.control.tempMinC}–${state.control.tempFanOnC}`
+    );
+  } catch (e) {
+    console.warn(`[control] DB load failed device=${deviceId}:`, e.message);
+  } finally {
+    state.controlBackfilled = true;
+  }
+}
+
+async function controlReady(deviceId) {
+  const d = getOrCreate(deviceId);
+  if (d.controlHydratePromise) {
+    await d.controlHydratePromise.catch(() => {});
+  }
+  return d;
+}
+
 function getOrCreate(deviceId) {
   if (!devices.has(deviceId)) {
     const state = {
       control: { ...fb.defaultControl() },
+      controlUpdatedAtMs: 0,
+      controlBackfilled: false,
+      controlHydratePromise: null,
       live: null,
       history: [],
       lastTelemetrySig: '',
@@ -200,6 +230,7 @@ function getOrCreate(deviceId) {
       alertState: {},
     };
     devices.set(deviceId, state);
+    state.controlHydratePromise = hydrateControlFromDb(deviceId, state);
 
     // Backfill in-memory 24h buffer from RTDB so /history24h and the mobile
     // history chart aren't empty after a server restart. Best-effort.
@@ -227,9 +258,12 @@ function getOrCreate(deviceId) {
   }
   fb.ensureControlSubscription(deviceId, (id, incoming) => {
     const d = devices.get(id);
-    // Merge only fields present in RTDB — never replace the whole object
-    // with defaults (that wiped in-memory overrides when the node was empty).
-    if (d && incoming) fb.applyControlSnapshot(d.control, incoming);
+    if (!d || !incoming) return;
+    const incomingTs = typeof incoming.updatedAtMs === 'number' ? incoming.updatedAtMs : 0;
+    // A newer PUT in memory wins over a stale RTDB snapshot (defaults / old ranges).
+    if (d.controlUpdatedAtMs && incomingTs < d.controlUpdatedAtMs) return;
+    fb.applyControlSnapshot(d.control, incoming);
+    if (incomingTs > (d.controlUpdatedAtMs || 0)) d.controlUpdatedAtMs = incomingTs;
   });
   return devices.get(deviceId);
 }
@@ -402,8 +436,8 @@ app.get('/architecture.pdf', (req, res) => {
   buildArchitecturePdf(res);
 });
 
-app.get('/api/devices/:deviceId/control', auth, (req, res) => {
-  const d = getOrCreate(req.params.deviceId);
+app.get('/api/devices/:deviceId/control', auth, async (req, res) => {
+  const d = await controlReady(req.params.deviceId);
   res.json(d.control);
 });
 
@@ -414,15 +448,27 @@ app.put('/api/devices/:deviceId/control', auth, async (req, res) => {
 
   // Memory is authoritative for the ESP32 + app. Firebase is a best-effort mirror.
   fb.applyControlSnapshot(d.control, b);
+  const now = Date.now();
+  d.control.updatedAtMs = now;
+  d.controlUpdatedAtMs = now;
+  let persisted = false;
   try {
-    await fb.mergeControlToFirebase(deviceId, b);
+    persisted = await fb.mergeControlToFirebase(deviceId, d.control);
   } catch (e) {
-    console.warn('[firebase] PUT not written to RTDB (using memory):', e.message);
+    console.warn('[firebase] PUT not written to RTDB:', e.message);
   }
-  res.json(d.control);
+  if (!persisted) {
+    console.warn(`[control] PUT device=${deviceId} not stored in DB (memory only)`);
+  }
+  console.log(
+    `[control] PUT device=${deviceId} persisted=${persisted ? '1' : '0'} ` +
+      `temp=${d.control.tempMinC}–${d.control.tempFanOnC} ` +
+      `hum=${d.control.humMinPct}–${d.control.humFanOnPct} co2=${d.control.co2MinPpm}–${d.control.co2ThresholdPpm}`
+  );
+  res.json({ ...d.control, persisted });
 });
 
-app.post('/api/devices/:deviceId/telemetry', auth, (req, res) => {
+app.post('/api/devices/:deviceId/telemetry', auth, async (req, res) => {
   const deviceId = req.params.deviceId;
   const d = getOrCreate(deviceId);
   const b = req.body || {};
@@ -592,6 +638,7 @@ app.post('/api/devices/:deviceId/telemetry', auth, (req, res) => {
       `persist=${shouldPersist ? (significant ? 'delta' : 'hourly') : '0'}`
   );
 
+  await controlReady(deviceId);
   res.json({ ok: true, control: d.control });
 });
 

@@ -1,85 +1,52 @@
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { StyleSheet, Text, View } from 'react-native';
-import { FEATURES } from '../lib/features';
 import { palette } from '../theme/palette';
-import { useColorScheme } from 'react-native';
+import { cardShadow, useTheme } from '../theme/useTheme';
 
-function ActuatorPill({ label, on, isDark }) {
-  const bg = on ? palette.forestGreen : isDark ? 'rgba(231,239,233,0.10)' : 'rgba(17,24,21,0.06)';
-  const fg = on ? 'white' : isDark ? palette.subtextDark : palette.subtextLight;
-  return (
-    <View style={[styles.pill, { backgroundColor: bg }]}>
-      <Text style={[styles.pillText, { color: fg }]}>
-        {label}: {on ? 'ON' : 'OFF'}
-      </Text>
-    </View>
-  );
-}
-
-export default function StatusCard({
-  online,
-  lastSeenText,
-  fanOn,
-  intakeFanOn,
-  sprinklerOn,
-  heaterOn,
-  control,
-}) {
-  const scheme = useColorScheme();
-  const isDark = scheme === 'dark';
-
-  const dotColor = online ? palette.good : palette.bad;
-  const bg = isDark ? palette.surfaceDark : palette.surfaceLight;
-  const text = isDark ? palette.textDark : palette.textLight;
-  const sub = isDark ? palette.subtextDark : palette.subtextLight;
-  const border = isDark ? palette.borderDark : palette.borderLight;
+export default function StatusCard({ online, lastSeenText, allGood, anyBad }) {
+  const t = useTheme();
+  const bg = online ? palette.forestBanner : t.isDark ? '#3A1A1A' : '#5C2A2A';
+  const title = online ? 'System Online' : 'System Offline';
+  const subtitle = !online
+    ? lastSeenText
+    : anyBad
+      ? 'Some conditions need attention'
+      : allGood
+        ? 'All conditions are normal'
+        : 'Conditions are close to the target range';
 
   return (
-    <View style={[styles.card, { backgroundColor: bg, borderColor: border }]}>
-      <View style={styles.row}>
-        <View style={[styles.dot, { backgroundColor: dotColor }]} />
-        <Text style={[styles.label, { color: text }]}>{online ? 'Online' : 'Offline'}</Text>
+    <View style={[styles.card, { backgroundColor: bg }]}>
+      <View style={styles.iconWrap}>
+        <Ionicons name={online ? 'wifi' : 'cloud-offline'} size={18} color="white" />
       </View>
-      <View style={styles.pillRow}>
-        <ActuatorPill
-          label="Exhaust"
-          on={control?.manualOverride ? !!control.manualFanOn : !!fanOn}
-          isDark={isDark}
-        />
-        <ActuatorPill
-          label="Intake"
-          on={control?.manualIntakeFanOverride ? !!control.manualIntakeFanOn : !!intakeFanOn}
-          isDark={isDark}
-        />
-        <ActuatorPill
-          label="Sprinkler"
-          on={control?.manualSprinklerOverride ? !!control.manualSprinklerOn : !!sprinklerOn}
-          isDark={isDark}
-        />
-        {FEATURES.heater ? (
-          <ActuatorPill
-            label="Heater"
-            on={control?.manualHeaterOverride ? !!control.manualHeaterOn : !!heaterOn}
-            isDark={isDark}
-          />
-        ) : null}
+      <View style={{ flex: 1 }}>
+        <Text style={styles.title}>{title}</Text>
+        <Text style={styles.sub}>{subtitle}</Text>
       </View>
-      <Text style={[styles.sub, { color: sub }]}>{lastSeenText}</Text>
+      <Ionicons name={online ? 'radio' : 'alert-circle'} size={18} color="rgba(255,255,255,0.85)" />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   card: {
-    borderWidth: 1,
-    borderRadius: 14,
-    padding: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderRadius: 18,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    ...cardShadow(false),
   },
-  row: { flexDirection: 'row', alignItems: 'center' },
-  dot: { width: 10, height: 10, borderRadius: 5, marginRight: 10 },
-  label: { fontSize: 16, fontWeight: '700' },
-  pillRow: { flexDirection: 'row', gap: 6, marginTop: 10, flexWrap: 'wrap' },
-  pill: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999 },
-  pillText: { fontSize: 12, fontWeight: '700' },
-  sub: { marginTop: 8, fontSize: 12 },
+  iconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.16)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  title: { color: 'white', fontSize: 16, fontWeight: '800' },
+  sub: { color: 'rgba(255,255,255,0.82)', fontSize: 12, marginTop: 2 },
 });
-

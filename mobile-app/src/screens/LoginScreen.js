@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  ImageBackground,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -9,24 +10,26 @@ import {
   Text,
   TextInput,
   View,
-  useColorScheme,
 } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
+import { StatusBar } from 'expo-status-bar';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { BrandMark, PrimaryButton } from '../components/ui';
 import { palette } from '../theme/palette';
 
-export default function LoginScreen({ session }) {
-  const scheme = useColorScheme();
-  const isDark = scheme === 'dark';
-  const bg = isDark ? palette.bgDark : palette.bgLight;
-  const surface = isDark ? palette.surfaceDark : palette.surfaceLight;
-  const text = isDark ? palette.textDark : palette.textLight;
-  const sub = isDark ? palette.subtextDark : palette.subtextLight;
-  const border = isDark ? palette.borderDark : palette.borderLight;
+const HERO = require('../../assets/hero-mushrooms.png');
 
+export default function LoginScreen({ session }) {
+  const insets = useSafeAreaInsets();
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showForm, setShowForm] = useState(false);
 
-  const canSubmit = useMemo(() => username.trim().length > 0 && password.length > 0 && !loading, [username, password, loading]);
+  const canSubmit = useMemo(
+    () => username.trim().length > 0 && password.length > 0 && !loading,
+    [username, password, loading]
+  );
 
   async function submit() {
     if (!canSubmit) return;
@@ -41,73 +44,102 @@ export default function LoginScreen({ session }) {
   }
 
   return (
-    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
-      <View style={[styles.container, { backgroundColor: bg }]}>
-        <View style={styles.header}>
-          <Text style={[styles.h1, { color: text }]}>Mushroom Nursery</Text>
-          <Text style={[styles.p, { color: sub }]}>Admin login</Text>
-        </View>
-
-        <View style={[styles.card, { backgroundColor: surface, borderColor: border }]}>
-          <Text style={[styles.label, { color: sub }]}>Username</Text>
-          <TextInput
-            value={username}
-            onChangeText={setUsername}
-            autoCapitalize="none"
-            autoCorrect={false}
-            placeholder="admin"
-            placeholderTextColor={isDark ? 'rgba(231,239,233,0.35)' : 'rgba(17,24,21,0.35)'}
-            style={[styles.input, { color: text, borderColor: border }]}
-          />
-
-          <Text style={[styles.label, { color: sub, marginTop: 10 }]}>Password</Text>
-          <TextInput
-            value={password}
-            onChangeText={setPassword}
-            secureTextEntry
-            placeholder="••••••••"
-            placeholderTextColor={isDark ? 'rgba(231,239,233,0.35)' : 'rgba(17,24,21,0.35)'}
-            style={[styles.input, { color: text, borderColor: border }]}
-          />
-
-          <Pressable
-            onPress={submit}
-            disabled={!canSubmit}
-            style={[
-              styles.btn,
-              { backgroundColor: canSubmit ? palette.forestGreen : 'rgba(127,127,127,0.3)', opacity: loading ? 0.8 : 1 },
-            ]}
-          >
-            {loading ? <ActivityIndicator color="white" /> : <Text style={styles.btnText}>Sign in</Text>}
-          </Pressable>
-
-          <Text style={[styles.help, { color: sub }]}>
-            Default login: username `admin`, password `admin`. Change it in Settings after you sign in.
+    <ImageBackground source={HERO} style={styles.bg} resizeMode="cover">
+      <StatusBar style="light" />
+      <LinearGradient
+        colors={['rgba(8,24,16,0.25)', 'rgba(8,24,16,0.55)', 'rgba(8,22,14,0.92)']}
+        style={StyleSheet.absoluteFill}
+      />
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={[styles.inner, { paddingTop: insets.top + 36, paddingBottom: insets.bottom + 24 }]}
+      >
+        <View style={styles.heroCopy}>
+          <BrandMark size={72} />
+          <Text style={styles.brand}>
+            Mushroom<Text style={{ color: '#B7E4C7' }}>Nursery</Text>
           </Text>
+          <Text style={styles.tagline}>Healthy Environment.{'\n'}Better Harvests.</Text>
         </View>
-      </View>
-    </KeyboardAvoidingView>
+
+        {showForm ? (
+          <View style={styles.card}>
+            <Text style={styles.label}>Username</Text>
+            <TextInput
+              value={username}
+              onChangeText={setUsername}
+              autoCapitalize="none"
+              autoCorrect={false}
+              placeholder="admin"
+              placeholderTextColor="rgba(22,48,39,0.35)"
+              style={styles.input}
+            />
+            <Text style={[styles.label, { marginTop: 10 }]}>Password</Text>
+            <TextInput
+              value={password}
+              onChangeText={setPassword}
+              secureTextEntry
+              placeholder="••••••••"
+              placeholderTextColor="rgba(22,48,39,0.35)"
+              style={styles.input}
+            />
+            <View style={{ marginTop: 16 }}>
+              {loading ? (
+                <View style={styles.loadingBtn}>
+                  <ActivityIndicator color="white" />
+                </View>
+              ) : (
+                <PrimaryButton label="Sign in" onPress={submit} disabled={!canSubmit} />
+              )}
+            </View>
+            <Pressable onPress={() => setShowForm(false)} style={{ marginTop: 12, alignItems: 'center' }}>
+              <Text style={{ color: palette.subtextLight, fontWeight: '700' }}>Back</Text>
+            </Pressable>
+          </View>
+        ) : (
+          <View style={{ gap: 12, paddingBottom: 12 }}>
+            <PrimaryButton label="Get Started" icon="paper-plane" onPress={() => setShowForm(true)} />
+          </View>
+        )}
+      </KeyboardAvoidingView>
+    </ImageBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 16, justifyContent: 'center', gap: 14, alignItems: 'center' },
-  header: { width: '100%', alignItems: 'center', marginBottom: 4 },
-  h1: { fontSize: 32, fontWeight: '900', letterSpacing: -0.6, textAlign: 'center' },
-  p: { marginTop: 6, fontSize: 13, textAlign: 'center' },
-  card: { width: '100%', maxWidth: 420, borderWidth: 1, borderRadius: 14, padding: 14 },
-  label: { fontSize: 13, fontWeight: '800' },
+  bg: { flex: 1 },
+  inner: { flex: 1, justifyContent: 'space-between', paddingHorizontal: 24 },
+  heroCopy: { alignItems: 'center', gap: 12, marginTop: 24 },
+  brand: { color: 'white', fontSize: 32, fontWeight: '800', letterSpacing: -0.8 },
+  tagline: {
+    color: 'rgba(255,255,255,0.88)',
+    fontSize: 18,
+    textAlign: 'center',
+    lineHeight: 26,
+    fontWeight: '600',
+  },
+  card: {
+    backgroundColor: 'rgba(255,255,255,0.96)',
+    borderRadius: 24,
+    padding: 18,
+  },
+  label: { fontSize: 13, fontWeight: '800', color: palette.subtextLight },
   input: {
     borderWidth: 1,
-    borderRadius: 12,
+    borderColor: palette.borderLight,
+    borderRadius: 14,
     paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingVertical: 11,
     fontSize: 16,
     fontWeight: '600',
+    color: palette.textLight,
     marginTop: 6,
+    backgroundColor: '#F7FBF8',
   },
-  btn: { marginTop: 14, paddingVertical: 12, borderRadius: 12, alignItems: 'center' },
-  btnText: { color: 'white', fontWeight: '900' },
-  help: { marginTop: 12, fontSize: 12 },
+  loadingBtn: {
+    backgroundColor: palette.forestGreen,
+    borderRadius: 999,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
 });
-

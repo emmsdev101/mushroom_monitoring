@@ -7,7 +7,7 @@
  * 3. Memory Management: Added client.stop() logic to prevent socket leakage.
  * 4. Header Optimization: Simplified headers to ensure they fit standard buffers.
  */
-
+// test
 #if !defined(ARDUINO_ARCH_ESP32)
 #error This sketch requires an ESP32 board. In Arduino IDE choose Board: ESP32 Dev Module (or your ESP32 model). Do not select Arduino AVR or UNO.
 #endif
@@ -107,9 +107,11 @@ static SensirionI2cScd4x scd4x;
 static WiFiManager wifiManager;
 
 static const uint32_t PUBLISH_INTERVAL_MS = 5000;
-static const uint32_t CONTROL_HTTP_TIMEOUT_MS = 5000;
-static const uint32_t TELEMETRY_HTTP_TIMEOUT_MS = 30000;
-static uint32_t lastPublishMs = 0;
+static const uint32_t STEP_PAUSE_MS = 200;
+static const uint32_t CONTROL_HTTP_TIMEOUT_MS = 8000;
+static const uint32_t TELEMETRY_HTTP_TIMEOUT_MS = 20000;
+static const uint8_t TELEMETRY_RETRIES = 3;
+static const uint32_t TELEMETRY_RETRY_DELAY_MS = 2000;
 static int lastCo2ppm = -1;
 static float lastTempC = NAN;
 static float lastHumPct = NAN;
@@ -215,10 +217,17 @@ static void addApiKeyHeader(HTTPClient &http) {
   }
 }
 
+static void resetSecureClient() {
+  secureClient.stop();
+  delay(30);
+  secureClient.setInsecure();
+  secureClient.setHandshakeTimeout(20);
+  secureClient.setTimeout(TELEMETRY_HTTP_TIMEOUT_MS);
+}
+
 static void httpBeginSmart(HTTPClient &http, const String &url, uint32_t timeoutMs = TELEMETRY_HTTP_TIMEOUT_MS) {
     if (url.startsWith("https://")) {
-        secureClient.setInsecure();
-        secureClient.setTimeout(timeoutMs);
+        resetSecureClient();
         http.begin(secureClient, url);
     } else {
         http.begin(url);
@@ -226,7 +235,8 @@ static void httpBeginSmart(HTTPClient &http, const String &url, uint32_t timeout
 
     http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
     http.setTimeout(timeoutMs);
-    http.useHTTP10(false); // Modern cloud hosts prefer HTTP/1.1
+    http.useHTTP10(false);
+    http.setReuse(false);
 }
 
 static void logServerHttp(const char *method, const String &url, int httpCode, const String &detail = String()) {
@@ -326,14 +336,20 @@ static bool wifiConnectOrPortal() {
   }
   if (ok) {
     persistServerUrlAfterPortal();
+    WiFi.setSleep(false);
+    WiFi.setAutoReconnect(true);
   }
   return ok;
 }
 
 static bool wifiEnsureConnected() {
-  if (WiFi.status() == WL_CONNECTED) return true;
+  if (WiFi.status() == WL_CONNECTED) {
+    WiFi.setSleep(false);
+    return true;
+  }
 
   WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
   WiFi.reconnect();
   const uint32_t start = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - start < 12000) {
@@ -408,23 +424,20 @@ static void scd41ReadCo2ppm(int &ppmOut) {
   ppmOut = lastCo2ppm;
 }
 
-static void applyActuators(float temp, float hum, int co2ppm) {
-    const bool coldNow = !isnan(temp) && temp < tempMinC;
+static void applyAutoActuators(float temp, float hum, int co2ppm) {
+  const bool coldNow = !isnan(temp) && temp < tempMinC;
 
+  if (!manualOverride) {
     bool desiredFanOn = false;
-    if (manualOverride) {
-      desiredFanOn = manualFanOn;
-    } else {
-      if (co2ppm > 0 && co2ppm > co2ThresholdPpm) desiredFanOn = true;
-      if (!isnan(temp) && temp > tempFanOnC) desiredFanOn = true;
-      if (!coldNow && !isnan(hum) && hum > humFanOnPct) desiredFanOn = true;
-    }
+    if (co2ppm > 0 && co2ppm > co2ThresholdPpm) desiredFanOn = true;
+    if (!isnan(temp) && temp > tempFanOnC) desiredFanOn = true;
+    if (!coldNow && !isnan(hum) && hum > humFanOnPct) desiredFanOn = true;
     if (desiredFanOn != fanOn) setRelay(desiredFanOn);
+  }
 
+  if (!manualIntakeFanOverride) {
     bool desiredIntakeOn = false;
-    if (manualIntakeFanOverride) {
-      desiredIntakeOn = manualIntakeFanOn;
-    } else if (intakeFanEnabled) {
+    if (intakeFanEnabled) {
       if (co2ppm > 0 && co2ppm > co2ThresholdPpm) desiredIntakeOn = true;
       if (!isnan(temp) && temp > tempFanOnC) desiredIntakeOn = true;
     }
@@ -433,16 +446,12 @@ static void applyActuators(float temp, float hum, int co2ppm) {
 #else
     if (intakeFanOn) intakeFanOn = false;
 #endif
+  }
 
+  if (!manualSprinklerOverride) {
     bool desiredSprinklerOn = sprinklerOn;
     const uint32_t nowMs = millis();
-    if (manualSprinklerOverride) {
-      desiredSprinklerOn = manualSprinklerOn;
-    } else if (!sprinklerEnabled) {
-      desiredSprinklerOn = false;
-    } else if (coldNow) {
-      desiredSprinklerOn = false;
-    } else if (isnan(hum)) {
+    if (!sprinklerEnabled || coldNow || isnan(hum)) {
       desiredSprinklerOn = false;
     } else if (sprinklerOn) {
       const bool humRecovered = hum >= sprinklerOffHumPct;
@@ -460,13 +469,12 @@ static void applyActuators(float temp, float hum, int co2ppm) {
 #else
     if (sprinklerOn) sprinklerOn = false;
 #endif
+  }
 
+  if (!manualHeaterOverride) {
     bool desiredHeaterOn = heaterOn;
-    if (manualHeaterOverride) {
-      desiredHeaterOn = manualHeaterOn;
-    } else if (!heaterEnabled) {
-      desiredHeaterOn = false;
-    } else if (isnan(temp)) {
+    const uint32_t nowMs = millis();
+    if (!heaterEnabled || isnan(temp)) {
       desiredHeaterOn = false;
     } else if (heaterOn) {
       const bool tempRecovered = temp >= heaterOffTempC;
@@ -484,48 +492,84 @@ static void applyActuators(float temp, float hum, int co2ppm) {
 #else
     if (heaterOn) heaterOn = false;
 #endif
+  }
+}
+
+static void applyOverrideActuators() {
+  if (manualOverride && manualFanOn != fanOn) setRelay(manualFanOn);
+  if (manualIntakeFanOverride && manualIntakeFanOn != intakeFanOn) {
+#if INTAKE_FAN_PIN >= 0
+    setIntakeRelay(manualIntakeFanOn);
+#else
+    intakeFanOn = false;
+#endif
+  }
+  if (manualSprinklerOverride && manualSprinklerOn != sprinklerOn) {
+#if SPRINKLER_PIN >= 0
+    setSprinklerRelay(manualSprinklerOn);
+#else
+    sprinklerOn = false;
+#endif
+  }
+  if (manualHeaterOverride && manualHeaterOn != heaterOn) {
+#if HEATER_PIN >= 0
+    setHeaterRelay(manualHeaterOn);
+#else
+    heaterOn = false;
+#endif
+  }
 }
 
 static bool applyControlPayload(const String &payload) {
-  StaticJsonDocument<1024> doc;
-  if (deserializeJson(doc, payload)) return false;
-
-  JsonVariantConst c = doc["control"];
-  const bool nested = c.is<JsonObject>();
-  if (!nested) c = doc;
-  if (!nested && !c["co2ThresholdPpm"].is<int>() && !c["manualOverride"].is<bool>()) {
+  StaticJsonDocument<2048> doc;
+  const DeserializationError err = deserializeJson(doc, payload);
+  if (err) {
+    Serial.printf("control parse failed: %s len=%u\n", err.c_str(), (unsigned)payload.length());
     return false;
   }
 
-  if (c["co2ThresholdPpm"].is<int>()) co2ThresholdPpm = c["co2ThresholdPpm"];
+  // POST returns { ok, control: {...} }. GET returns the object itself.
+  // Do not use is<JsonObject>() — ArduinoJson often reports that false on const variants.
+  JsonVariantConst c = doc["control"];
+  if (c.isNull()) c = doc.as<JsonVariantConst>();
+  if (c["manualOverride"].isNull() && c["co2ThresholdPpm"].isNull()) {
+    Serial.println("control payload has no control fields");
+    return false;
+  }
+
+  if (!c["co2ThresholdPpm"].isNull()) co2ThresholdPpm = (int)c["co2ThresholdPpm"];
   if (!c["tempFanOnC"].isNull()) tempFanOnC = c["tempFanOnC"];
   if (!c["humFanOnPct"].isNull()) humFanOnPct = c["humFanOnPct"];
-  if (c["manualOverride"].is<bool>()) manualOverride = c["manualOverride"];
-  if (c["manualFanOn"].is<bool>()) manualFanOn = c["manualFanOn"];
-  if (c["intakeFanEnabled"].is<bool>()) intakeFanEnabled = c["intakeFanEnabled"];
-  if (c["manualIntakeFanOverride"].is<bool>()) manualIntakeFanOverride = c["manualIntakeFanOverride"];
-  if (c["manualIntakeFanOn"].is<bool>()) manualIntakeFanOn = c["manualIntakeFanOn"];
-  if (c["sprinklerEnabled"].is<bool>()) sprinklerEnabled = c["sprinklerEnabled"];
+  if (!c["manualOverride"].isNull()) manualOverride = (bool)c["manualOverride"];
+  if (!c["manualFanOn"].isNull()) manualFanOn = (bool)c["manualFanOn"];
+  if (!c["intakeFanEnabled"].isNull()) intakeFanEnabled = (bool)c["intakeFanEnabled"];
+  if (!c["manualIntakeFanOverride"].isNull()) manualIntakeFanOverride = (bool)c["manualIntakeFanOverride"];
+  if (!c["manualIntakeFanOn"].isNull()) manualIntakeFanOn = (bool)c["manualIntakeFanOn"];
+  if (!c["sprinklerEnabled"].isNull()) sprinklerEnabled = (bool)c["sprinklerEnabled"];
   if (!c["sprinklerOnHumPct"].isNull()) sprinklerOnHumPct = c["sprinklerOnHumPct"];
   if (!c["sprinklerOffHumPct"].isNull()) sprinklerOffHumPct = c["sprinklerOffHumPct"];
-  if (c["sprinklerMaxOnSec"].is<int>()) sprinklerMaxOnSec = (uint32_t)(int)c["sprinklerMaxOnSec"];
-  if (c["sprinklerMinOffSec"].is<int>()) sprinklerMinOffSec = (uint32_t)(int)c["sprinklerMinOffSec"];
-  if (c["manualSprinklerOverride"].is<bool>()) manualSprinklerOverride = c["manualSprinklerOverride"];
-  if (c["manualSprinklerOn"].is<bool>()) manualSprinklerOn = c["manualSprinklerOn"];
+  if (!c["sprinklerMaxOnSec"].isNull()) sprinklerMaxOnSec = (uint32_t)(int)c["sprinklerMaxOnSec"];
+  if (!c["sprinklerMinOffSec"].isNull()) sprinklerMinOffSec = (uint32_t)(int)c["sprinklerMinOffSec"];
+  if (!c["manualSprinklerOverride"].isNull()) manualSprinklerOverride = (bool)c["manualSprinklerOverride"];
+  if (!c["manualSprinklerOn"].isNull()) manualSprinklerOn = (bool)c["manualSprinklerOn"];
   if (!c["tempMinC"].isNull()) tempMinC = c["tempMinC"];
-  if (c["heaterEnabled"].is<bool>()) heaterEnabled = c["heaterEnabled"];
+  if (!c["heaterEnabled"].isNull()) heaterEnabled = (bool)c["heaterEnabled"];
   if (!c["heaterOnTempC"].isNull()) heaterOnTempC = c["heaterOnTempC"];
   if (!c["heaterOffTempC"].isNull()) heaterOffTempC = c["heaterOffTempC"];
-  if (c["heaterMaxOnSec"].is<int>()) heaterMaxOnSec = (uint32_t)(int)c["heaterMaxOnSec"];
-  if (c["heaterMinOffSec"].is<int>()) heaterMinOffSec = (uint32_t)(int)c["heaterMinOffSec"];
-  if (c["manualHeaterOverride"].is<bool>()) manualHeaterOverride = c["manualHeaterOverride"];
-  if (c["manualHeaterOn"].is<bool>()) manualHeaterOn = c["manualHeaterOn"];
-  applyActuators(lastTempC, lastHumPct, lastCo2ppm);
+  if (!c["heaterMaxOnSec"].isNull()) heaterMaxOnSec = (uint32_t)(int)c["heaterMaxOnSec"];
+  if (!c["heaterMinOffSec"].isNull()) heaterMinOffSec = (uint32_t)(int)c["heaterMinOffSec"];
+  if (!c["manualHeaterOverride"].isNull()) manualHeaterOverride = (bool)c["manualHeaterOverride"];
+  if (!c["manualHeaterOn"].isNull()) manualHeaterOn = (bool)c["manualHeaterOn"];
+  applyOverrideActuators();
+  applyAutoActuators(lastTempC, lastHumPct, lastCo2ppm);
+  Serial.printf(
+      "control applied ov=%d fanWant=%d Tmax=%.1f exhaust=%d\n",
+      manualOverride, manualFanOn, tempFanOnC, fanOn);
   return true;
 }
 
-static void readControlFromServer() {
-  if (WiFi.status() != WL_CONNECTED) return;
+static bool readControlFromServer() {
+  if (WiFi.status() != WL_CONNECTED) return false;
 
   HTTPClient http;
   const String url = serverBaseUrl() + "/api/devices/" + DEVICE_ID + "/control";
@@ -533,11 +577,13 @@ static void readControlFromServer() {
   httpBeginSmart(http, url, CONTROL_HTTP_TIMEOUT_MS);
   addApiKeyHeader(http);
 
+  bool ok = false;
   const int code = http.GET();
   if (code == HTTP_CODE_OK) {
     const String payload = http.getString();
     if (applyControlPayload(payload)) {
       logServerHttp("GET", url, code, "ok");
+      ok = true;
     } else {
       logServerHttp("GET", url, code, "control parse failed");
     }
@@ -546,6 +592,24 @@ static void readControlFromServer() {
     if (code < 0) secureClient.stop();
   }
   http.end();
+  return ok;
+}
+
+static void fetchRangesOnBoot() {
+  Serial.println("boot: fetching target ranges from server");
+  for (uint8_t attempt = 1; attempt <= 5; attempt++) {
+    if (readControlFromServer()) {
+      Serial.printf(
+          "boot ranges Tmin=%.1f Tmax=%.1f Hmax=%.0f CO2max=%d\n",
+          tempMinC, tempFanOnC, humFanOnPct, co2ThresholdPpm);
+      return;
+    }
+    Serial.printf("boot ranges retry %u/5\n", (unsigned)attempt);
+    delay(2000);
+  }
+  Serial.printf(
+      "boot ranges fallback Tmax=%.1f Hmax=%.0f CO2max=%d\n",
+      tempFanOnC, humFanOnPct, co2ThresholdPpm);
 }
 
 static void postTelemetryToServer(float tempC, float humPct, int co2ppm) {
@@ -568,30 +632,49 @@ static void postTelemetryToServer(float tempC, float humPct, int co2ppm) {
     String body;
     serializeJson(doc, body);
 
-    HTTPClient http;
     const String url = serverBaseUrl() + "/api/devices/" + DEVICE_ID + "/telemetry";
-    
-    httpBeginSmart(http, url, TELEMETRY_HTTP_TIMEOUT_MS);
-    http.addHeader("Content-Type", "application/json");
-    http.addHeader("User-Agent", "ESP32-SCD41-Node"); 
-    addApiKeyHeader(http);
-
-    const int code = http.POST(body);
     bool appliedControl = false;
+    int code = 0;
 
-    if (code < 0) {
+    for (uint8_t attempt = 1; attempt <= TELEMETRY_RETRIES; attempt++) {
+      HTTPClient http;
+      httpBeginSmart(http, url, TELEMETRY_HTTP_TIMEOUT_MS);
+      http.addHeader("Content-Type", "application/json");
+      http.addHeader("User-Agent", "ESP32-SCD41-Node");
+      http.addHeader("Connection", "close");
+      addApiKeyHeader(http);
+
+      code = http.POST(body);
+
+      if (code < 0) {
         logServerHttp("POST", url, code, http.errorToString(code));
-        secureClient.stop();
-    } else if (code != HTTP_CODE_OK && code != 201) {
-        logServerHttp("POST", url, code, "telemetry rejected");
-    } else {
-        const String payload = http.getString();
-        appliedControl = applyControlPayload(payload);
-        logServerHttp("POST", url, code, appliedControl ? "ok + control" : "ok");
-    }
-    http.end();
+        http.end();
+        resetSecureClient();
+        if (attempt < TELEMETRY_RETRIES) {
+          Serial.printf("telemetry retry %u/%u\n", (unsigned)(attempt + 1), (unsigned)TELEMETRY_RETRIES);
+          delay(TELEMETRY_RETRY_DELAY_MS);
+          continue;
+        }
+        break;
+      }
 
-    // Old server returns { ok: true } with no control — fetch it separately.
+      if (code != HTTP_CODE_OK && code != 201) {
+        logServerHttp("POST", url, code, "telemetry rejected");
+        http.end();
+        resetSecureClient();
+        break;
+      }
+
+      const String payload = http.getString();
+      appliedControl = applyControlPayload(payload);
+      logServerHttp("POST", url, code, appliedControl ? "ok + control" : "ok");
+      if (!appliedControl) {
+        Serial.printf("POST body len=%u\n", (unsigned)payload.length());
+      }
+      http.end();
+      break;
+    }
+
     if ((code == HTTP_CODE_OK || code == 201) && !appliedControl) {
       readControlFromServer();
     }
@@ -624,6 +707,8 @@ void setup() {
     delay(3000);
     ESP.restart();
   }
+  WiFi.setSleep(false);
+  WiFi.setAutoReconnect(true);
 
   // I2C after Wi-Fi: ESP32 radio init often leaves the SCD41 bus stuck.
   if (!scd41Begin()) {
@@ -631,29 +716,41 @@ void setup() {
   }
 
   if (WiFi.status() == WL_CONNECTED) {
-    readControlFromServer();
+    fetchRangesOnBoot();
   }
 }
 
 void loop() {
   wifiEnsureConnected();
+  delay(STEP_PAUSE_MS);
 
-  const uint32_t now = millis();
+  // 1. Read sensors.
+  lastHumPct = dht.readHumidity();
+  lastTempC = dht.readTemperature();
+  scd41Ensure(millis());
+  scd41ReadCo2ppm(lastCo2ppm);
+  Serial.printf("1 sensors T=%.1f H=%.0f CO2=%d\n", lastTempC, lastHumPct, lastCo2ppm);
+  delay(STEP_PAUSE_MS);
 
-  if (now - lastPublishMs >= PUBLISH_INTERVAL_MS || lastPublishMs == 0) {
-    lastPublishMs = now;
+  // 2. Auto thresholds only — skip any channel that is in override.
+  applyAutoActuators(lastTempC, lastHumPct, lastCo2ppm);
+  Serial.printf(
+      "2 auto exhaust=%d intake=%d sprinkler=%d heater=%d Tmax=%.1f ov=%d\n",
+      fanOn, intakeFanOn, sprinklerOn, heaterOn, tempFanOnC, manualOverride);
+  delay(STEP_PAUSE_MS);
 
-    lastHumPct = dht.readHumidity();
-    lastTempC = dht.readTemperature();
-    scd41Ensure(now);
-    scd41ReadCo2ppm(lastCo2ppm);
-    Serial.printf("sensors T=%.1f H=%.0f CO2=%d\n", lastTempC, lastHumPct, lastCo2ppm);
-    applyActuators(lastTempC, lastHumPct, lastCo2ppm);
-
-    if (WiFi.status() == WL_CONNECTED) {
-      postTelemetryToServer(lastTempC, lastHumPct, lastCo2ppm);
-    }
+  // 3. POST telemetry.  4. Apply override relays from the response.
+  if (WiFi.status() == WL_CONNECTED) {
+    postTelemetryToServer(lastTempC, lastHumPct, lastCo2ppm);
   }
+  Serial.printf(
+      "4 override exhaust=%d/%d intake=%d/%d sprinkler=%d/%d heater=%d/%d\n",
+      manualOverride, fanOn,
+      manualIntakeFanOverride, intakeFanOn,
+      manualSprinklerOverride, sprinklerOn,
+      manualHeaterOverride, heaterOn);
 
-  delay(50);
+  // Always rest 5s after the four steps. Fitting the work *inside* 5s
+  // made HTTPS-heavy cycles post back-to-back with no gap.
+  delay(PUBLISH_INTERVAL_MS);
 }

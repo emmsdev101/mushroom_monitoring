@@ -126,7 +126,8 @@ const CONTROL_BOOL_FIELDS = [
 ];
 
 function coerceNumField(raw, spec) {
-  const v = raw[spec.key];
+  let v = raw[spec.key];
+  if (typeof v === 'string' && v.trim() !== '') v = Number(v);
   if (typeof v !== 'number' || !Number.isFinite(v)) return undefined;
   const n = spec.int ? Math.round(v) : v;
   if (n < spec.min || n > spec.max) return undefined;
@@ -224,10 +225,25 @@ function ensureControlSubscription(deviceId, onUpdate) {
 /**
  * @returns {Promise<void>}
  */
-async function mergeControlToFirebase(deviceId, body) {
-  if (!canUseRtdb()) return;
+async function loadControl(deviceId) {
+  if (!deviceId || !canUseRtdb()) return null;
   const { db } = await getFirebaseContext();
-  if (!canUseRtdb()) return;
+  if (!canUseRtdb()) return null;
+  try {
+    const snap = await get(ref(db, `devices/${deviceId}/control`));
+    if (!snap.exists()) return null;
+    const v = snap.val();
+    return v && typeof v === 'object' ? v : null;
+  } catch (e) {
+    if (isPermissionDenied(e)) disableRtdb('permission_denied');
+    return null;
+  }
+}
+
+async function mergeControlToFirebase(deviceId, body) {
+  if (!canUseRtdb()) return false;
+  const { db } = await getFirebaseContext();
+  if (!canUseRtdb()) return false;
   const patch = {};
   const b = body || {};
   for (const spec of CONTROL_NUM_FIELDS) {
@@ -237,9 +253,13 @@ async function mergeControlToFirebase(deviceId, body) {
   for (const key of CONTROL_BOOL_FIELDS) {
     if (typeof b[key] === 'boolean') patch[key] = b[key];
   }
-  if (Object.keys(patch).length === 0) return;
+  if (typeof b.updatedAtMs === 'number' && Number.isFinite(b.updatedAtMs)) {
+    patch.updatedAtMs = b.updatedAtMs;
+  }
+  if (Object.keys(patch).length === 0) return false;
   try {
     await update(ref(db, `devices/${deviceId}/control`), patch);
+    return true;
   } catch (e) {
     if (isPermissionDenied(e)) disableRtdb('permission_denied');
     throw e;
@@ -439,6 +459,7 @@ module.exports = {
   defaultControl,
   applyControlSnapshot,
   ensureControlSubscription,
+  loadControl,
   mergeControlToFirebase,
   mergeLiveToFirebase,
   mergeHistory24hToFirebase,

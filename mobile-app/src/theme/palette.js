@@ -1,20 +1,26 @@
 export const palette = {
-  forestGreen: '#1f8a50',
+  forestGreen: '#1F7A4A',
+  forestDeep: '#163D2C',
+  forestBanner: '#1A6B42',
 
-  bgDark: '#0b0f0d',
-  surfaceDark: '#141a17',
-  borderDark: '#26302b',
-  textDark: '#e7efe9',
-  subtextDark: '#9fb2a8',
+  mint: '#E7F4EC',
+  mintStrong: '#D4EDDD',
+  mintDark: '#1A2A22',
 
-  bgLight: '#f6faf7',
-  surfaceLight: '#ffffff',
-  borderLight: '#e1e8e3',
-  textLight: '#111815',
-  subtextLight: '#4f5f57',
+  bgDark: '#0B0F0D',
+  surfaceDark: '#141A17',
+  borderDark: '#26302B',
+  textDark: '#E7EFE9',
+  subtextDark: '#9FB2A8',
 
-  good: '#2fbf71',
-  warn: '#ffb020',
-  bad: '#e5484d',
+  bgLight: '#F3F7F4',
+  surfaceLight: '#FFFFFF',
+  borderLight: '#E4EDE7',
+  textLight: '#163027',
+  subtextLight: '#5F7268',
+
+  good: '#2D9B5C',
+  warn: '#E39B2B',
+  bad: '#E5484D',
+  info: '#2F7BD1',
 };
-

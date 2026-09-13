@@ -458,14 +458,20 @@ app.put('/api/devices/:deviceId/control', auth, async (req, res) => {
     console.warn('[firebase] PUT not written to RTDB:', e.message);
   }
   if (!persisted) {
-    console.warn(`[control] PUT device=${deviceId} not stored in DB (memory only)`);
+    console.warn(`[control] PUT device=${deviceId} not stored in DB`);
+    return res.status(503).json({
+      error:
+        'Could not store target ranges in the database. Check Firebase Anonymous Auth and RTDB rules, then retry.',
+      persisted: false,
+      ...d.control,
+    });
   }
   console.log(
-    `[control] PUT device=${deviceId} persisted=${persisted ? '1' : '0'} ` +
+    `[control] PUT device=${deviceId} persisted=1 ` +
       `temp=${d.control.tempMinC}–${d.control.tempFanOnC} ` +
       `hum=${d.control.humMinPct}–${d.control.humFanOnPct} co2=${d.control.co2MinPpm}–${d.control.co2ThresholdPpm}`
   );
-  res.json({ ...d.control, persisted });
+  res.json({ ...d.control, persisted: true });
 });
 
 app.post('/api/devices/:deviceId/telemetry', auth, async (req, res) => {
@@ -476,6 +482,15 @@ app.post('/api/devices/:deviceId/telemetry', auth, async (req, res) => {
   const sig = telemetrySignature(b);
   const unchanged = sig && sig === d.lastTelemetrySig;
   const live = { ...b, serverTsMs: now };
+  // Device may echo last-known thresholds; those are not live sensor data
+  // and must not overwrite devices/<id>/control in the console.
+  delete live.co2ThresholdPpm;
+  delete live.tempFanOnC;
+  delete live.humFanOnPct;
+  delete live.tempMinC;
+  delete live.humMinPct;
+  delete live.co2MinPpm;
+  delete live.manualOverride;
   d.live = live;
 
   // `live` is a chatty per-5s snapshot; mirror only when values changed at

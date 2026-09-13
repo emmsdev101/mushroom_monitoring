@@ -7,7 +7,7 @@
  * 3. Memory Management: Added client.stop() logic to prevent socket leakage.
  * 4. Header Optimization: Simplified headers to ensure they fit standard buffers.
  */
-// test
+// 
 #if !defined(ARDUINO_ARCH_ESP32)
 #error This sketch requires an ESP32 board. In Arduino IDE choose Board: ESP32 Dev Module (or your ESP32 model). Do not select Arduino AVR or UNO.
 #endif
@@ -108,7 +108,7 @@ static WiFiManager wifiManager;
 
 static const uint32_t PUBLISH_INTERVAL_MS = 5000;
 static const uint32_t STEP_PAUSE_MS = 200;
-static const uint32_t CONTROL_HTTP_TIMEOUT_MS = 8000;
+static const uint32_t CONTROL_HTTP_TIMEOUT_MS = 20000;
 static const uint32_t TELEMETRY_HTTP_TIMEOUT_MS = 20000;
 static const uint8_t TELEMETRY_RETRIES = 3;
 static const uint32_t TELEMETRY_RETRY_DELAY_MS = 2000;
@@ -217,18 +217,77 @@ static void addApiKeyHeader(HTTPClient &http) {
   }
 }
 
+static bool parseHttpUrl(const String &url, String &host, uint16_t &port, String &path, bool &https) {
+  String rest = url;
+  if (rest.startsWith("https://")) {
+    https = true;
+    rest.remove(0, 8);
+    port = 443;
+  } else if (rest.startsWith("http://")) {
+    https = false;
+    rest.remove(0, 7);
+    port = 80;
+  } else {
+    return false;
+  }
+  const int slash = rest.indexOf('/');
+  const String hostport = slash < 0 ? rest : rest.substring(0, slash);
+  path = slash < 0 ? "/" : rest.substring(slash);
+  const int colon = hostport.indexOf(':');
+  if (colon >= 0) {
+    host = hostport.substring(0, colon);
+    const int p = hostport.substring(colon + 1).toInt();
+    if (p > 0) port = (uint16_t)p;
+  } else {
+    host = hostport;
+  }
+  return host.length() > 0;
+}
+
+static void logWifiAndDns(const String &url) {
+  Serial.printf(
+      "[wifi] ip=%s gw=%s dns=%s rssi=%d\n",
+      WiFi.localIP().toString().c_str(),
+      WiFi.gatewayIP().toString().c_str(),
+      WiFi.dnsIP().toString().c_str(),
+      WiFi.RSSI());
+  String host, path;
+  uint16_t port = 0;
+  bool https = false;
+  if (!parseHttpUrl(url, host, port, path, https)) {
+    Serial.printf("[dns] bad url %s\n", url.c_str());
+    return;
+  }
+  IPAddress ip;
+  if (WiFi.hostByName(host.c_str(), ip)) {
+    Serial.printf("[dns] %s -> %s:%u\n", host.c_str(), ip.toString().c_str(), port);
+  } else {
+    Serial.printf("[dns] FAIL %s\n", host.c_str());
+  }
+}
+
+static void wifiUseStationOnly() {
+  WiFi.softAPdisconnect(true);
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
+  WiFi.setAutoReconnect(true);
+}
+
 static void resetSecureClient() {
   secureClient.stop();
   delay(30);
   secureClient.setInsecure();
-  secureClient.setHandshakeTimeout(20);
+  secureClient.setHandshakeTimeout(30);
   secureClient.setTimeout(TELEMETRY_HTTP_TIMEOUT_MS);
 }
 
 static void httpBeginSmart(HTTPClient &http, const String &url, uint32_t timeoutMs = TELEMETRY_HTTP_TIMEOUT_MS) {
-    if (url.startsWith("https://")) {
+    String host, path;
+    uint16_t port = 0;
+    bool https = false;
+    if (parseHttpUrl(url, host, port, path, https) && https) {
         resetSecureClient();
-        http.begin(secureClient, url);
+        http.begin(secureClient, host, port, path, true);
     } else {
         http.begin(url);
     }
@@ -336,8 +395,7 @@ static bool wifiConnectOrPortal() {
   }
   if (ok) {
     persistServerUrlAfterPortal();
-    WiFi.setSleep(false);
-    WiFi.setAutoReconnect(true);
+    wifiUseStationOnly();
   }
   return ok;
 }
@@ -596,16 +654,22 @@ static bool readControlFromServer() {
 }
 
 static void fetchRangesOnBoot() {
+  const String url = serverBaseUrl() + "/api/devices/" + DEVICE_ID + "/control";
   Serial.println("boot: fetching target ranges from server");
-  for (uint8_t attempt = 1; attempt <= 5; attempt++) {
+  Serial.printf("boot url %s\n", url.c_str());
+  delay(3000);
+  logWifiAndDns(url);
+
+  for (uint8_t attempt = 1; attempt <= 8; attempt++) {
     if (readControlFromServer()) {
       Serial.printf(
           "boot ranges Tmin=%.1f Tmax=%.1f Hmax=%.0f CO2max=%d\n",
           tempMinC, tempFanOnC, humFanOnPct, co2ThresholdPpm);
       return;
     }
-    Serial.printf("boot ranges retry %u/5\n", (unsigned)attempt);
-    delay(2000);
+    Serial.printf("boot ranges retry %u/8\n", (unsigned)attempt);
+    if (attempt == 1 || attempt == 4) logWifiAndDns(url);
+    delay(5000);
   }
   Serial.printf(
       "boot ranges fallback Tmax=%.1f Hmax=%.0f CO2max=%d\n",
@@ -623,10 +687,6 @@ static void postTelemetryToServer(float tempC, float humPct, int co2ppm) {
     doc["intakeFanOn"] = intakeFanOn;
     doc["sprinklerOn"] = sprinklerOn;
     doc["heaterOn"] = heaterOn;
-    doc["co2ThresholdPpm"] = co2ThresholdPpm;
-    doc["tempFanOnC"] = tempFanOnC;
-    doc["humFanOnPct"] = humFanOnPct;
-    doc["manualOverride"] = manualOverride;
     doc["tsMs"] = (int)millis();
 
     String body;
@@ -707,8 +767,7 @@ void setup() {
     delay(3000);
     ESP.restart();
   }
-  WiFi.setSleep(false);
-  WiFi.setAutoReconnect(true);
+  wifiUseStationOnly();
 
   // I2C after Wi-Fi: ESP32 radio init often leaves the SCD41 bus stuck.
   if (!scd41Begin()) {

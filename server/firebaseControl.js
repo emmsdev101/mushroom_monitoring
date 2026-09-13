@@ -258,7 +258,11 @@ async function mergeControlToFirebase(deviceId, body) {
   }
   if (Object.keys(patch).length === 0) return false;
   try {
-    await update(ref(db, `devices/${deviceId}/control`), patch);
+    const out = { ...defaultControl(), ...patch };
+    if (typeof b.updatedAtMs === 'number' && Number.isFinite(b.updatedAtMs)) {
+      out.updatedAtMs = b.updatedAtMs;
+    }
+    await set(ref(db, `devices/${deviceId}/control`), out);
     return true;
   } catch (e) {
     if (isPermissionDenied(e)) disableRtdb('permission_denied');

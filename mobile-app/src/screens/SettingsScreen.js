@@ -242,17 +242,11 @@ export default function SettingsScreen({ deviceIdState, onSignOut }) {
         manualHeaterOn: false,
       });
       await refreshControl?.();
-      if (saved && saved.persisted === false) {
-        Alert.alert(
-          'Saved on server only',
-          'Could not write target ranges to the database. They may reset when the server restarts.'
-        );
-      } else {
-        Alert.alert(
-          'Saved',
-          'Target ranges stored. The device will use them after the next fetch and on reboot.'
-        );
-      }
+      const tmax = typeof saved?.tempFanOnC === 'number' ? saved.tempFanOnC : '—';
+      Alert.alert(
+        'Saved',
+        `Target ranges stored in the database. Temp max is ${tmax} °C. Confirm devices/${nextDeviceId}/control/tempFanOnC in Firebase.`
+      );
     } catch (e) {
       Alert.alert('Save failed', String(e?.message || e));
     } finally {

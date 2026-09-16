@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Kabutech Monitoring",
+    "name": "Smart Monitoring System for Oyster Mushroom Cultivation",
     "slug": "mushroom-nursery",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -10,7 +10,7 @@
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#1A6B42"
+      "backgroundColor": "#203C46"
     },
     "ios": {
       "supportsTablet": true,
@@ -20,9 +20,10 @@
       "package": "com.emman.mushroomnursery",
       "versionCode": 1,
       "edgeToEdgeEnabled": true,
+      "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#1A6B42"
+        "backgroundColor": "#203C46"
       }
     },
     "web": {

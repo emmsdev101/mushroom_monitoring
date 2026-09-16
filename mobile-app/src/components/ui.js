@@ -11,7 +11,7 @@ export function BrandMark({ size = 34 }) {
     <Image
       source={LOGO}
       style={{ width: size, height: size, borderRadius: size / 2 }}
-      accessibilityLabel="Kabutech Monitoring"
+      accessibilityLabel="Smart Monitoring System for Oyster Mushroom Cultivation"
     />
   );
 }
@@ -21,10 +21,18 @@ export function BrandLockup({ compact = false }) {
   return (
     <View style={styles.lockup}>
       <BrandMark size={compact ? 30 : 34} />
-      <View>
-        <Text style={[styles.brand, { color: t.text, fontSize: compact ? 16 : 18 }]}>Kabutech</Text>
-        <Text style={[styles.brandSub, { color: palette.forestGreen, fontSize: compact ? 11 : 12 }]}>
-          Monitoring
+      <View style={{ flex: 1 }}>
+        <Text
+          style={[styles.brand, { color: t.text, fontSize: compact ? 13 : 16 }]}
+          numberOfLines={2}
+        >
+          Smart Monitoring System
+        </Text>
+        <Text
+          style={[styles.brandSub, { color: palette.forestGreen, fontSize: compact ? 10 : 12 }]}
+          numberOfLines={2}
+        >
+          for Oyster Mushroom Cultivation
         </Text>
       </View>
     </View>

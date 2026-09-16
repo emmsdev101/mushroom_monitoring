@@ -632,7 +632,7 @@ app.post('/api/devices/:deviceId/telemetry', auth, async (req, res) => {
             d.alertState[key] = { above: true, lastSentMs: st.lastSentMs };
             continue;
           }
-          const title = 'Kabutech Monitoring Alert';
+          const title = 'Smart Monitoring Alert';
           const direction = isLow ? 'low' : 'high';
           const body =
             key === 'co2'
@@ -674,7 +674,7 @@ app.post('/api/devices/:deviceId/telemetry', auth, async (req, res) => {
           if (!cur || cur.above) continue; // still above or unknown
 
           // Recovery: only on transition.
-          const title = 'Kabutech Monitoring';
+          const title = 'Smart Monitoring System';
           const body =
             key === 'co2'
               ? `CO₂ back to normal: ${cur.value != null ? Math.round(cur.value) : '-'} ppm (threshold ${cur.thr})`

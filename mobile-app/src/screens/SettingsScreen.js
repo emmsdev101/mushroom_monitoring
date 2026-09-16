@@ -291,7 +291,7 @@ export default function SettingsScreen({ deviceIdState, onSignOut }) {
         >
           <Text style={[styles.section, { color: t.text }]}>1. Target ranges</Text>
           <Text style={[styles.hint, { color: t.sub }]}>
-            Min and max for the grow room. This is what the fans, mister, and heater follow. Use the green button below — not Save connection.
+            Min and max for the grow room. This is what the fans{FEATURES.heater ? ', mister, and heater' : ' and mister'} follow. Use the green button below — not Save connection.
           </Text>
           <View style={[styles.card, { backgroundColor: t.surface }, cardShadow(t.isDark)]}>
             <InfoRow icon="cloud-outline" label="CO₂" value={`${co2MinPpm || DEFAULTS.co2Min} – ${co2Threshold || DEFAULTS.co2Max} ppm`} t={t} />
@@ -316,7 +316,7 @@ export default function SettingsScreen({ deviceIdState, onSignOut }) {
           </View>
 
           <View style={[styles.card, { backgroundColor: t.surface }, cardShadow(t.isDark)]}>
-            <Text style={[styles.label, { color: t.text }]}>Mister & heater timing</Text>
+            <Text style={[styles.label, { color: t.text }]}>{FEATURES.heater ? 'Mister & heater timing' : 'Mister timing'}</Text>
             <Text style={[styles.hint, { color: t.sub, marginTop: 0 }]}>Saved together with the ranges above.</Text>
             <View style={styles.switchRow}>
               <Text style={[styles.label, { color: t.text }]}>Intake fan enabled</Text>

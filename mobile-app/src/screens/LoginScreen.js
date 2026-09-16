@@ -1,11 +1,13 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   ImageBackground,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -21,10 +23,26 @@ const HERO = require('../../assets/hero-mushrooms.png');
 
 export default function LoginScreen({ session }) {
   const insets = useSafeAreaInsets();
+  const scrollRef = useRef(null);
+  const passwordRef = useRef(null);
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [showForm, setShowForm] = useState(false);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const show = Keyboard.addListener(showEvent, (e) => {
+      setKeyboardHeight(e.endCoordinates?.height ?? 0);
+    });
+    const hide = Keyboard.addListener(hideEvent, () => setKeyboardHeight(0));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
 
   const canSubmit = useMemo(
     () => username.trim().length > 0 && password.length > 0 && !loading,
@@ -33,6 +51,7 @@ export default function LoginScreen({ session }) {
 
   async function submit() {
     if (!canSubmit) return;
+    Keyboard.dismiss();
     setLoading(true);
     try {
       await session.signIn(username, password);
@@ -43,6 +62,12 @@ export default function LoginScreen({ session }) {
     }
   }
 
+  function scrollToInput() {
+    requestAnimationFrame(() => {
+      scrollRef.current?.scrollToEnd({ animated: true });
+    });
+  }
+
   return (
     <ImageBackground source={HERO} style={styles.bg} resizeMode="cover">
       <StatusBar style="light" />
@@ -51,57 +76,93 @@ export default function LoginScreen({ session }) {
         style={StyleSheet.absoluteFill}
       />
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={[styles.inner, { paddingTop: insets.top + 36, paddingBottom: insets.bottom + 24 }]}
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={0}
       >
-        <View style={styles.heroCopy}>
-          <BrandMark size={72} />
-          <Text style={styles.brand}>
-            Kabutech{'\n'}
-            <Text style={{ color: '#B7E4C7' }}>Monitoring</Text>
-          </Text>
-          <Text style={styles.tagline}>Healthy Environment.{'\n'}Better Harvests.</Text>
-        </View>
+        <ScrollView
+          ref={scrollRef}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={[
+            styles.inner,
+            {
+              paddingTop: insets.top + 24,
+              paddingBottom: Math.max(insets.bottom, 16) + (showForm ? keyboardHeight : 0) + 16,
+              justifyContent: showForm ? 'flex-start' : 'space-between',
+            },
+          ]}
+        >
+          <View style={[styles.heroCopy, showForm && styles.heroCopyCompact]}>
+            <BrandMark size={showForm ? 56 : 72} />
+            <Text style={[styles.brand, showForm && styles.brandCompact]}>
+              Smart Monitoring System{'\n'}
+              <Text style={{ color: '#B7E4C7', fontSize: showForm ? 16 : 20 }}>
+                for Oyster Mushroom Cultivation
+              </Text>
+            </Text>
+            {!showForm && (
+              <Text style={styles.tagline}>Healthy Environment.{'\n'}Better Harvests.</Text>
+            )}
+          </View>
 
-        {showForm ? (
-          <View style={styles.card}>
-            <Text style={styles.label}>Username</Text>
-            <TextInput
-              value={username}
-              onChangeText={setUsername}
-              autoCapitalize="none"
-              autoCorrect={false}
-              placeholder="admin"
-              placeholderTextColor="rgba(22,48,39,0.35)"
-              style={styles.input}
-            />
-            <Text style={[styles.label, { marginTop: 10 }]}>Password</Text>
-            <TextInput
-              value={password}
-              onChangeText={setPassword}
-              secureTextEntry
-              placeholder="••••••••"
-              placeholderTextColor="rgba(22,48,39,0.35)"
-              style={styles.input}
-            />
-            <View style={{ marginTop: 16 }}>
-              {loading ? (
-                <View style={styles.loadingBtn}>
-                  <ActivityIndicator color="white" />
-                </View>
-              ) : (
-                <PrimaryButton label="Sign in" onPress={submit} disabled={!canSubmit} />
-              )}
+          {showForm ? (
+            <View style={styles.card}>
+              <Text style={styles.label}>Username</Text>
+              <TextInput
+                value={username}
+                onChangeText={setUsername}
+                autoCapitalize="none"
+                autoCorrect={false}
+                autoComplete="username"
+                placeholder="admin"
+                placeholderTextColor="rgba(22,48,39,0.35)"
+                style={styles.input}
+                returnKeyType="next"
+                blurOnSubmit={false}
+                onFocus={scrollToInput}
+                onSubmitEditing={() => passwordRef.current?.focus()}
+              />
+              <Text style={[styles.label, { marginTop: 10 }]}>Password</Text>
+              <TextInput
+                ref={passwordRef}
+                value={password}
+                onChangeText={setPassword}
+                secureTextEntry
+                autoComplete="password"
+                placeholder="••••••••"
+                placeholderTextColor="rgba(22,48,39,0.35)"
+                style={styles.input}
+                returnKeyType="go"
+                onFocus={scrollToInput}
+                onSubmitEditing={submit}
+              />
+              <View style={{ marginTop: 16 }}>
+                {loading ? (
+                  <View style={styles.loadingBtn}>
+                    <ActivityIndicator color="white" />
+                  </View>
+                ) : (
+                  <PrimaryButton label="Sign in" onPress={submit} disabled={!canSubmit} />
+                )}
+              </View>
+              <Pressable
+                onPress={() => {
+                  Keyboard.dismiss();
+                  setShowForm(false);
+                }}
+                style={{ marginTop: 12, alignItems: 'center' }}
+              >
+                <Text style={{ color: palette.subtextLight, fontWeight: '700' }}>Back</Text>
+              </Pressable>
             </View>
-            <Pressable onPress={() => setShowForm(false)} style={{ marginTop: 12, alignItems: 'center' }}>
-              <Text style={{ color: palette.subtextLight, fontWeight: '700' }}>Back</Text>
-            </Pressable>
-          </View>
-        ) : (
-          <View style={{ gap: 12, paddingBottom: 12 }}>
-            <PrimaryButton label="Get Started" icon="paper-plane" onPress={() => setShowForm(true)} />
-          </View>
-        )}
+          ) : (
+            <View style={{ paddingBottom: 12 }}>
+              <PrimaryButton label="Get Started" icon="paper-plane" onPress={() => setShowForm(true)} />
+            </View>
+          )}
+        </ScrollView>
       </KeyboardAvoidingView>
     </ImageBackground>
   );
@@ -109,9 +170,19 @@ export default function LoginScreen({ session }) {
 
 const styles = StyleSheet.create({
   bg: { flex: 1 },
-  inner: { flex: 1, justifyContent: 'space-between', paddingHorizontal: 24 },
+  flex: { flex: 1 },
+  inner: { flexGrow: 1, paddingHorizontal: 24, gap: 20 },
   heroCopy: { alignItems: 'center', gap: 12, marginTop: 24 },
-  brand: { color: 'white', fontSize: 32, fontWeight: '800', letterSpacing: -0.8, textAlign: 'center', lineHeight: 38 },
+  heroCopyCompact: { marginTop: 8, marginBottom: 4, gap: 8 },
+  brand: {
+    color: 'white',
+    fontSize: 26,
+    fontWeight: '800',
+    letterSpacing: -0.6,
+    textAlign: 'center',
+    lineHeight: 32,
+  },
+  brandCompact: { fontSize: 20, lineHeight: 26 },
   tagline: {
     color: 'rgba(255,255,255,0.88)',
     fontSize: 18,
@@ -123,6 +194,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.96)',
     borderRadius: 24,
     padding: 18,
+    width: '100%',
   },
   label: { fontSize: 13, fontWeight: '800', color: palette.subtextLight },
   input: {
@@ -130,7 +202,8 @@ const styles = StyleSheet.create({
     borderColor: palette.borderLight,
     borderRadius: 14,
     paddingHorizontal: 12,
-    paddingVertical: 11,
+    paddingVertical: 12,
+    minHeight: 48,
     fontSize: 16,
     fontWeight: '600',
     color: palette.textLight,

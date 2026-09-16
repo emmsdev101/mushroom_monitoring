@@ -63,7 +63,9 @@ export default function ControlScreen({ deviceId }) {
               <Text style={[styles.infoBody, { color: t.sub }]}>
                 {derived.anyManual
                   ? 'Some devices are still in override. Switch to Manual to change them, or return each one to auto.'
-                  : 'System is running in automatic mode. Fans, mister, and heater follow the target ranges.'}
+                  : FEATURES.heater
+                    ? 'System is running in automatic mode. Fans, mister, and heater follow the target ranges.'
+                    : 'System is running in automatic mode. Fans and mister follow the target ranges.'}
               </Text>
             </View>
 

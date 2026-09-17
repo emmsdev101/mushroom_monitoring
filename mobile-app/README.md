@@ -10,7 +10,7 @@ cd mobile-app
 npm install
 ```
 
-2. Confirm the Render URL in **Settings → Server** (default: `https://mushroom-nursery-server.onrender.com`). If the server has `API_KEY` set, enter the same key there.
+2. Default API is Render (`https://mushroom-nursery-server.onrender.com`). To use a PC on your LAN instead, see the **root `README.md`** (“Run the API on your PC” and “Point the mobile app at the local server”). If the server has `API_KEY` set, enter the same key in Settings.
 
 ### Run
 - Android (via Expo): `npm run android`

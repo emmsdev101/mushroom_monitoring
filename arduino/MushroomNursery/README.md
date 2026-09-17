@@ -8,6 +8,8 @@ ESP32 sketch for **Arduino IDE 2.x** + **ESP32**. Sends sensor data to the **`se
 
 2. **`config.h`**: copy **`config.h.example`** → **`config.h`** and edit (Wi‑Fi AP name, **`SERVER_BASE_URL_DEFAULT`** as the compile-time fallback, pins, `DEVICE_ID`). `config.h` is gitignored so secrets stay local. After Wi‑Fi setup, the captive portal includes **Node server base URL**; that value is stored in NVS and used for HTTP. You can reopen the portal to change it without recompiling.
 
+   Wiring diagram: **`wiring-diagram.png`** (DHT11, SCD41, 4-channel relay, Wi‑Fi reset jumper).
+
    (If you still have the old macro **`SERVER_BASE_URL`**, the sketch maps it to the default for compatibility.)
 
 3. In Arduino IDE, install boards support:
@@ -28,6 +30,23 @@ ESP32 sketch for **Arduino IDE 2.x** + **ESP32**. Sends sensor data to the **`se
    - **ArduinoJson** (Benoit Blanchon)
 
 7. Open **`MushroomNursery.ino`**, **Verify**, **Upload**.
+
+## Wiring
+
+![ESP32 wiring diagram](wiring-diagram.png)
+
+| Function | GPIO | Notes |
+|----------|------|--------|
+| DHT11 DATA | **4** | VCC = 3.3 V, GND common |
+| SCD41 SDA | **21** | VCC = 3.3 V |
+| SCD41 SCL | **22** | |
+| Exhaust relay IN | **23** | Active-LOW; load on **COM + NO** |
+| Intake relay IN | **25** | Same |
+| Mister relay IN | **26** | Same |
+| Heater relay IN | **27** | Same (hidden in the app for now) |
+| Wi‑Fi reset | **18** | Hold to GND ~600 ms at boot |
+
+Do not use GPIO **34–36** or **39**. Leave relay **NC** empty so a power loss turns loads **off**.
 
 ## Sketch too big (only if the linker complains)
 

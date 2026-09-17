@@ -14,18 +14,35 @@
     },
     "ios": {
       "supportsTablet": true,
-      "icon": "./assets/icon.png"
+      "icon": "./assets/icon.png",
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true,
+          "NSAllowsLocalNetworking": true
+        }
+      }
     },
     "android": {
       "package": "com.emman.mushroomnursery",
       "versionCode": 1,
       "edgeToEdgeEnabled": true,
       "softwareKeyboardLayoutMode": "resize",
+      "usesCleartextTraffic": true,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#203C46"
       }
     },
+    "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ]
+    ],
     "web": {
       "favicon": "./assets/favicon.png"
     },

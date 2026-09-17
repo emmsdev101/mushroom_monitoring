@@ -24,6 +24,19 @@ function buildHeaders(extra) {
   return headers;
 }
 
+function describeNetworkError(url, err) {
+  const raw = String(err?.message || err);
+  if (/network request failed|failed to fetch|network error/i.test(raw)) {
+    const http = /^http:\/\//i.test(url);
+    return new Error(
+      http
+        ? `Cannot reach ${url}. This installed app blocks plain HTTP until it is rebuilt with cleartext traffic allowed. Use the LAN IP plus port, e.g. http://192.168.1.10:3000 — a phone browser can open HTTP even when the app cannot.`
+        : `Cannot reach ${url}. Check Wi‑Fi, the URL, and that the server is running.`
+    );
+  }
+  return err instanceof Error ? err : new Error(raw);
+}
+
 async function fetchWithTimeout(url, opts = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), timeoutMs);
@@ -36,6 +49,12 @@ async function fetchWithTimeout(url, opts = {}, timeoutMs = DEFAULT_TIMEOUT_MS) 
   try {
     const { signal: _ignored, ...rest } = opts;
     return await fetch(url, { ...rest, signal: controller.signal });
+  } catch (e) {
+    if (e?.name === 'AbortError') {
+      if (caller?.aborted) throw e;
+      throw new Error(`Timed out reaching ${url}`);
+    }
+    throw describeNetworkError(url, e);
   } finally {
     clearTimeout(t);
     if (caller) caller.removeEventListener('abort', onCallerAbort);
@@ -80,6 +99,20 @@ async function apiWrite(method, path, body, { signal, timeoutMs } = {}) {
 
 export function apiPut(path, body, opts) { return apiWrite('PUT', path, body, opts); }
 export function apiPost(path, body, opts) { return apiWrite('POST', path, body, opts); }
+
+/** Probe a typed base URL (does not use the saved cache). */
+export async function pingServer(baseUrl, { timeoutMs = 8000 } = {}) {
+  const base = String(baseUrl || '').trim().replace(/\/+$/, '');
+  if (!base) throw new Error('Server base URL is not configured.');
+  const url = `${base}/health`;
+  const res = await fetchWithTimeout(url, { method: 'GET', headers: { Accept: 'application/json' } }, timeoutMs);
+  const body = await parseJsonSafe(res);
+  if (!res.ok) {
+    const msg = body && typeof body === 'object' && body.error ? body.error : `HTTP ${res.status}`;
+    throw new Error(msg);
+  }
+  return body;
+}
 
 // -----------------------------------------------------------------------------
 // Polling hook. Drop-in replacement for `useRtdbValue`: gives you the same

@@ -16,7 +16,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppHeader, navigateRoot } from '../components/ui';
-import { apiPut, devicePath } from '../lib/api';
+import { apiPut, devicePath, pingServer } from '../lib/api';
 import { DEFAULT_SERVER_BASE_URL, useServerConfig } from '../lib/config';
 import { FEATURES } from '../lib/features';
 import { changeLocalCreds, getLocalCreds } from '../lib/localAuth';
@@ -257,17 +257,32 @@ export default function SettingsScreen({ deviceIdState, onSignOut }) {
     }
   }
 
+  async function commitServerConfig(url) {
+    await serverConfig.update({ baseUrl: url, apiKey: pendingApiKey });
+    Alert.alert('Connection saved', 'This phone will use the new API address. Target ranges were not changed.');
+    refreshControl?.();
+  }
+
   async function saveServerConfig() {
     const url = pendingServerUrl.trim();
     if (!url) return Alert.alert('Invalid server URL', 'URL cannot be empty.');
     if (!/^https?:\/\//i.test(url)) return Alert.alert('Invalid server URL', 'URL must start with http:// or https://');
+    if (/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(url)) {
+      return Alert.alert(
+        'Use the LAN IP',
+        'localhost is this phone, not your PC. Use http://192.168.x.x:3000 (the address that works in the phone browser).'
+      );
+    }
     setSavingServer(true);
     try {
-      await serverConfig.update({ baseUrl: url, apiKey: pendingApiKey });
-      Alert.alert('Connection saved', 'This phone will use the new API address. Target ranges were not changed.');
-      refreshControl?.();
+      await pingServer(url);
+      await commitServerConfig(url);
     } catch (e) {
-      Alert.alert('Save failed', String(e?.message || e));
+      const message = String(e?.message || e);
+      Alert.alert('Cannot reach server', message, [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Save anyway', onPress: () => commitServerConfig(url) },
+      ]);
     } finally {
       setSavingServer(false);
     }
@@ -409,6 +424,9 @@ export default function SettingsScreen({ deviceIdState, onSignOut }) {
             />
             <InfoRow icon="wifi-outline" label="Device status" value={derived.online ? 'Online' : 'Offline'} t={t} />
             <Text style={[styles.help, { color: t.sub, marginTop: 8 }]}>API address</Text>
+            <Text style={[styles.hint, { color: t.sub, marginTop: 0 }]}>
+              Local server example: http://192.168.1.10:3000 — include the port. A browser can open HTTP; this app needs a rebuild to allow it.
+            </Text>
             <TextInput
               value={pendingServerUrl}
               onChangeText={setPendingServerUrl}
